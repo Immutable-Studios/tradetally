@@ -108,10 +108,13 @@ class AlphaVantageClient {
     }
   }
 
-  async getIntradayData(symbol, interval = '5min') {
+  // Note: TIME_SERIES_INTRADAY is an Alpha Vantage premium endpoint. Historical
+  // months (via the `month` param, format YYYY-MM) require a premium key. The free
+  // tier only returns the most recent trading days and is capped at 25 calls/day.
+  async getIntradayData(symbol, interval = '5min', month = null) {
     const symbolUpper = symbol.toUpperCase();
-    const cacheKey = `${symbolUpper}_${interval}`;
-    
+    const cacheKey = month ? `${symbolUpper}_${interval}_${month}` : `${symbolUpper}_${interval}`;
+
     // Check cache first
     const cached = await cache.get('chart_intraday', cacheKey);
     if (cached) {
@@ -120,12 +123,17 @@ class AlphaVantageClient {
     }
 
     try {
-      const data = await this.makeRequest({
+      const params = {
         function: 'TIME_SERIES_INTRADAY',
         symbol: symbol.toUpperCase(),
         interval: interval,
-        outputsize: 'full' // Get full day's data
-      });
+        outputsize: 'full' // Get full day's data (full month when `month` is set)
+      };
+      // Query a specific historical month (premium-only) when provided
+      if (month) {
+        params.month = month;
+      }
+      const data = await this.makeRequest(params);
 
       // Extract time series data
       const timeSeriesKey = `Time Series (${interval})`;
@@ -213,20 +221,55 @@ class AlphaVantageClient {
     }
   }
 
-  // Get chart data using daily data only (free tier compatible)
-  // Note: Intraday data (TIME_SERIES_INTRADAY) requires Alpha Vantage premium subscription
-  async getTradeChartData(symbol, entryDate, exitDate = null) {
+  // Get chart data for a trade.
+  // options.resolution: 'D' (daily) or '5' (5-minute intraday). When omitted,
+  // defaults to daily (the free-tier compatible behavior).
+  // Note: 5-minute intraday for historical trade dates requires an Alpha Vantage
+  // PREMIUM key (TIME_SERIES_INTRADAY with the `month` parameter). The free tier
+  // only serves recent daily data (TIME_SERIES_DAILY 'compact' = ~100 days).
+  async getTradeChartData(symbol, entryDate, exitDate = null, options = {}) {
+    const resolution = options.resolution || 'D';
     const entryTime = new Date(entryDate);
     const exitTime = exitDate ? new Date(exitDate) : new Date();
     const tradeDuration = exitTime - entryTime;
     const oneDayMs = 24 * 60 * 60 * 1000;
 
-    console.log(`Alpha Vantage chart request - Symbol: ${symbol}, Entry: ${entryTime.toISOString()}, Exit: ${exitTime.toISOString()}, Duration: ${Math.ceil(tradeDuration / oneDayMs)} days`);
+    console.log(`Alpha Vantage chart request - Symbol: ${symbol}, Resolution: ${resolution}, Entry: ${entryTime.toISOString()}, Exit: ${exitTime.toISOString()}, Duration: ${Math.ceil(tradeDuration / oneDayMs)} days`);
 
+    // 5-minute intraday (premium) — focus on the trade day(s) with extended hours
+    if (resolution === '5') {
+      try {
+        const month = entryTime.toISOString().slice(0, 7); // YYYY-MM of the trade
+        const rawCandles = await this.getIntradayData(symbol, '5min', month);
+
+        // Keep an extended-hours window: from 04:00 ET on entry day to 20:00 ET on exit day
+        const windowStart = Math.floor((new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z').getTime() + 9 * 60 * 60 * 1000) / 1000);
+        const windowEnd = Math.floor((new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z').getTime() + 25 * 60 * 60 * 1000) / 1000);
+
+        let filteredCandles = rawCandles.filter(c => c.time >= windowStart && c.time <= windowEnd);
+        if (filteredCandles.length === 0) {
+          console.warn(`No 5-min candles in trade window for ${symbol}, returning recent intraday data instead`);
+          filteredCandles = rawCandles.slice(-78); // ~1 trading day of 5-min bars
+        }
+
+        return {
+          type: 'intraday',
+          interval: '5min',
+          resolution: '5',
+          candles: filteredCandles,
+          source: 'alphavantage'
+        };
+      } catch (error) {
+        console.error(`Error fetching Alpha Vantage 5-min chart data for ${symbol}:`, error);
+        throw error;
+      }
+    }
+
+    // Daily resolution (default)
     try {
       // Compute date window for DB lookup
-      const windowStartDate = new Date(entryTime.getTime() - 7 * oneDayMs).toISOString().split('T')[0];
-      const windowEndDate = new Date(exitTime.getTime() + 7 * oneDayMs).toISOString().split('T')[0];
+      const windowStartDate = new Date(entryTime.getTime() - 90 * oneDayMs).toISOString().split('T')[0];
+      const windowEndDate = new Date(exitTime.getTime() + 14 * oneDayMs).toISOString().split('T')[0];
 
       // Check persistent DB cache first (zero API calls if covered)
       try {
@@ -238,6 +281,7 @@ class AlphaVantageClient {
             return {
               type: 'daily',
               interval: 'daily',
+              resolution: 'D',
               candles: cachedCandles,
               source: 'alphavantage_cache'
             };
@@ -247,14 +291,17 @@ class AlphaVantageClient {
         console.warn(`[PRICE-CACHE] DB lookup failed for ${symbol}, falling through to API: ${dbErr.message}`);
       }
 
-      // Use daily data only - intraday endpoints require premium subscription
-      // Free tier: TIME_SERIES_DAILY with 'compact' (last 100 days), 25 requests/day limit
-      console.log(`Fetching daily data for ${symbol} (free tier - daily resolution only)`);
-      const rawCandles = await this.getDailyData(symbol, 'compact');
+      // Choose output size based on how old the trade is. 'compact' (last ~100
+      // trading days) is free-tier friendly; trades older than that need 'full'
+      // (20+ years), which requires an Alpha Vantage premium key.
+      const tradeAgeDays = (Date.now() - entryTime.getTime()) / oneDayMs;
+      const outputsize = tradeAgeDays > 90 ? 'full' : 'compact';
+      console.log(`Fetching daily data for ${symbol} (outputsize=${outputsize}, trade age ${Math.round(tradeAgeDays)} days)`);
+      const rawCandles = await this.getDailyData(symbol, outputsize);
 
       // Filter to include a reasonable window around the trade dates
-      const windowStart = Math.floor((entryTime.getTime() - 7 * oneDayMs) / 1000); // 7 days before entry
-      const windowEnd = Math.floor((exitTime.getTime() + 7 * oneDayMs) / 1000); // 7 days after exit
+      const windowStart = Math.floor((entryTime.getTime() - 90 * oneDayMs) / 1000);
+      const windowEnd = Math.floor((exitTime.getTime() + 14 * oneDayMs) / 1000);
 
       let filteredCandles = rawCandles.filter(candle => {
         return candle.time >= windowStart && candle.time <= windowEnd;
@@ -272,6 +319,7 @@ class AlphaVantageClient {
       return {
         type: 'daily',
         interval: 'daily',
+        resolution: 'D',
         candles: filteredCandles,
         source: 'alphavantage'
       };

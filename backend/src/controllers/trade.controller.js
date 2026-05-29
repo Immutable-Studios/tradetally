@@ -4390,9 +4390,24 @@ const tradeController = {
                return res.status(400).json({ error: 'Trade missing entry date information' });
       }
 
+      // Optional resolution override. The trade detail view requests an explicit
+      // 'daily' and '5min' chart; older callers omit it and get the legacy
+      // auto-selected resolution based on the trade duration.
+      const resolutionParam = (req.query.resolution || '').toString().toLowerCase();
+      const resolutionMap = {
+        daily: 'D',
+        d: 'D',
+        '5min': '5',
+        '5': '5'
+      };
+      const resolution = resolutionMap[resolutionParam] || null;
+      if (resolutionParam && !resolution) {
+        return res.status(400).json({ error: `Unsupported chart resolution: ${resolutionParam}. Use 'daily' or '5min'.` });
+      }
+
       // Get chart data using the ChartService (for both stocks and options)
       // For options, this fetches the underlying stock's candlestick data (e.g., SPY)
-      const chartData = await ChartService.getTradeChartData(userId, symbol, entryDate, exitDate, req.headers.host);
+      const chartData = await ChartService.getTradeChartData(userId, symbol, entryDate, exitDate, req.headers.host, { resolution });
 
       // Add trade information to the response
       chartData.trade = {

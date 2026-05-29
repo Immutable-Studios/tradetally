@@ -535,51 +535,75 @@ class FinnhubClient {
     }
   }
 
-  // Get appropriate candle data based on trade duration for Pro users
-  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null) {
+  // Get candle data for a trade.
+  // options.resolution: 'D' (daily) or '5' (5-minute) forces a specific resolution
+  // and an appropriate date window. When omitted, the legacy auto-selection based
+  // on the trade duration is used (single trade day, 1/5/15-min or daily).
+  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, options = {}) {
+    const forcedResolution = options.resolution || null;
+
     // Log the dates we're working with to debug timezone issues
     console.log('getTradeChartData input dates:', {
       entryDate,
       exitDate,
+      forcedResolution,
       entryDateString: new Date(entryDate).toString(),
       exitDateString: exitDate ? new Date(exitDate).toString() : 'none'
     });
-    
+
     const entryTime = new Date(entryDate);
     const exitTime = exitDate ? new Date(exitDate) : new Date();
     const tradeDuration = exitTime - entryTime;
     const oneDayMs = 24 * 60 * 60 * 1000;
 
-    // Focus on the actual trade day only
-    // Get the trade date in UTC to avoid timezone issues
+    // Trade day(s) in UTC to avoid timezone issues
     const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    
-    // Set chart window to show extended trading hours for the trade day
-    // Pre-market: 4:00 AM ET to 9:30 AM ET
-    // Regular hours: 9:30 AM ET to 4:00 PM ET  
-    // After-hours: 4:00 PM ET to 8:00 PM ET
-    
-    // Convert ET times to UTC (ET is UTC-5 in winter, UTC-4 in summer)
-    // For simplicity, assume EST (UTC-5) - this covers most trading
-    
-    // Start at 4:00 AM ET on trade day (9:00 AM UTC)
-    const chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-    // End at 8:00 PM ET on trade day (1:00 AM UTC next day)  
-    const chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
-    
-    console.log('Focusing chart on single trading day:', {
-      tradeDate: entryDateUTC.toISOString().split('T')[0],
-      entryTime: entryTime.toISOString(),
-      chartFrom: chartFromTime.toISOString(),
-      chartTo: chartToTime.toISOString(),
-      windowHours: ((chartToTime - chartFromTime) / (1000 * 60 * 60)).toFixed(1)
-    });
+    const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
+
+    let resolution, intervalName, chartFromTime, chartToTime;
+
+    if (forcedResolution === 'D') {
+      // Daily chart: show broad context around the entire trade
+      // (~90 days before entry through ~14 days after exit, capped at now).
+      resolution = 'D';
+      intervalName = 'daily';
+      chartFromTime = new Date(entryDateUTC.getTime() - 90 * oneDayMs);
+      chartToTime = new Date(Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now()));
+    } else if (forcedResolution === '5') {
+      // 5-minute chart: focus on the trade day(s) with extended trading hours.
+      // 4:00 AM ET (~09:00 UTC) on the entry day to 8:00 PM ET (~01:00 UTC next day)
+      // on the exit day. ET assumed UTC-5 for simplicity; covers most sessions.
+      resolution = '5';
+      intervalName = '5min';
+      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
+      chartToTime = new Date(exitDateUTC.getTime() + 25 * 60 * 60 * 1000);
+    } else {
+      // Legacy auto-selection: single trade day window, resolution by duration.
+      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
+      chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
+      const chartDuration = chartToTime - chartFromTime;
+      if (chartDuration <= 7 * oneDayMs) {
+        resolution = '1';
+        intervalName = '1min';
+      } else if (chartDuration <= 30 * oneDayMs) {
+        resolution = '5';
+        intervalName = '5min';
+      } else if (chartDuration <= 90 * oneDayMs) {
+        resolution = '15';
+        intervalName = '15min';
+      } else {
+        resolution = 'D';
+        intervalName = 'daily';
+      }
+    }
 
     // Convert to Unix timestamps
     const fromTimestamp = Math.floor(chartFromTime.getTime() / 1000);
     const toTimestamp = Math.floor(chartToTime.getTime() / 1000);
-    
+
     console.log('Chart window calculation:', {
+      resolution,
+      intervalName,
       entryTime: entryTime.toISOString(),
       exitTime: exitTime.toISOString(),
       chartFromTime: chartFromTime.toISOString(),
@@ -590,40 +614,12 @@ class FinnhubClient {
     });
 
     try {
-      let resolution, intervalName;
-      const chartDuration = chartToTime - chartFromTime;
-      
-      // For Pro users, prioritize high-resolution data for better trade analysis
-      // Use 1-minute data aggressively for short to medium timeframes
-      if (chartDuration <= 7 * oneDayMs) {
-        resolution = '1';
-        intervalName = '1min';
-        console.log(`Fetching 1-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day window - high precision)`);
-      }
-      // For windows up to 30 days, use 5-minute data
-      else if (chartDuration <= 30 * oneDayMs) {
-        resolution = '5';
-        intervalName = '5min';
-        console.log(`Fetching 5-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      // For very large chart windows, use 15-minute data
-      else if (chartDuration <= 90 * oneDayMs) {
-        resolution = '15';
-        intervalName = '15min';
-        console.log(`Fetching 15-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      // For extremely large windows, use daily data
-      else {
-        resolution = 'D';
-        intervalName = 'daily';
-        console.log(`Fetching daily Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      
       const candles = await this.getStockCandles(symbol, resolution, fromTimestamp, toTimestamp, userId);
 
       return {
         type: resolution === 'D' ? 'daily' : 'intraday',
         interval: intervalName,
+        resolution,
         candles: candles,
         source: 'finnhub'
       };
@@ -1574,51 +1570,75 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
     }
   }
 
-  // Get appropriate candle data based on trade duration for Pro users
-  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null) {
+  // Get candle data for a trade.
+  // options.resolution: 'D' (daily) or '5' (5-minute) forces a specific resolution
+  // and an appropriate date window. When omitted, the legacy auto-selection based
+  // on the trade duration is used (single trade day, 1/5/15-min or daily).
+  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, options = {}) {
+    const forcedResolution = options.resolution || null;
+
     // Log the dates we're working with to debug timezone issues
     console.log('getTradeChartData input dates:', {
       entryDate,
       exitDate,
+      forcedResolution,
       entryDateString: new Date(entryDate).toString(),
       exitDateString: exitDate ? new Date(exitDate).toString() : 'none'
     });
-    
+
     const entryTime = new Date(entryDate);
     const exitTime = exitDate ? new Date(exitDate) : new Date();
     const tradeDuration = exitTime - entryTime;
     const oneDayMs = 24 * 60 * 60 * 1000;
 
-    // Focus on the actual trade day only
-    // Get the trade date in UTC to avoid timezone issues
+    // Trade day(s) in UTC to avoid timezone issues
     const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    
-    // Set chart window to show extended trading hours for the trade day
-    // Pre-market: 4:00 AM ET to 9:30 AM ET
-    // Regular hours: 9:30 AM ET to 4:00 PM ET  
-    // After-hours: 4:00 PM ET to 8:00 PM ET
-    
-    // Convert ET times to UTC (ET is UTC-5 in winter, UTC-4 in summer)
-    // For simplicity, assume EST (UTC-5) - this covers most trading
-    
-    // Start at 4:00 AM ET on trade day (9:00 AM UTC)
-    const chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-    // End at 8:00 PM ET on trade day (1:00 AM UTC next day)  
-    const chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
-    
-    console.log('Focusing chart on single trading day:', {
-      tradeDate: entryDateUTC.toISOString().split('T')[0],
-      entryTime: entryTime.toISOString(),
-      chartFrom: chartFromTime.toISOString(),
-      chartTo: chartToTime.toISOString(),
-      windowHours: ((chartToTime - chartFromTime) / (1000 * 60 * 60)).toFixed(1)
-    });
+    const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
+
+    let resolution, intervalName, chartFromTime, chartToTime;
+
+    if (forcedResolution === 'D') {
+      // Daily chart: show broad context around the entire trade
+      // (~90 days before entry through ~14 days after exit, capped at now).
+      resolution = 'D';
+      intervalName = 'daily';
+      chartFromTime = new Date(entryDateUTC.getTime() - 90 * oneDayMs);
+      chartToTime = new Date(Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now()));
+    } else if (forcedResolution === '5') {
+      // 5-minute chart: focus on the trade day(s) with extended trading hours.
+      // 4:00 AM ET (~09:00 UTC) on the entry day to 8:00 PM ET (~01:00 UTC next day)
+      // on the exit day. ET assumed UTC-5 for simplicity; covers most sessions.
+      resolution = '5';
+      intervalName = '5min';
+      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
+      chartToTime = new Date(exitDateUTC.getTime() + 25 * 60 * 60 * 1000);
+    } else {
+      // Legacy auto-selection: single trade day window, resolution by duration.
+      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
+      chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
+      const chartDuration = chartToTime - chartFromTime;
+      if (chartDuration <= 7 * oneDayMs) {
+        resolution = '1';
+        intervalName = '1min';
+      } else if (chartDuration <= 30 * oneDayMs) {
+        resolution = '5';
+        intervalName = '5min';
+      } else if (chartDuration <= 90 * oneDayMs) {
+        resolution = '15';
+        intervalName = '15min';
+      } else {
+        resolution = 'D';
+        intervalName = 'daily';
+      }
+    }
 
     // Convert to Unix timestamps
     const fromTimestamp = Math.floor(chartFromTime.getTime() / 1000);
     const toTimestamp = Math.floor(chartToTime.getTime() / 1000);
-    
+
     console.log('Chart window calculation:', {
+      resolution,
+      intervalName,
       entryTime: entryTime.toISOString(),
       exitTime: exitTime.toISOString(),
       chartFromTime: chartFromTime.toISOString(),
@@ -1629,40 +1649,12 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
     });
 
     try {
-      let resolution, intervalName;
-      const chartDuration = chartToTime - chartFromTime;
-      
-      // For Pro users, prioritize high-resolution data for better trade analysis
-      // Use 1-minute data aggressively for short to medium timeframes
-      if (chartDuration <= 7 * oneDayMs) {
-        resolution = '1';
-        intervalName = '1min';
-        console.log(`Fetching 1-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day window - high precision)`);
-      }
-      // For windows up to 30 days, use 5-minute data
-      else if (chartDuration <= 30 * oneDayMs) {
-        resolution = '5';
-        intervalName = '5min';
-        console.log(`Fetching 5-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      // For very large chart windows, use 15-minute data
-      else if (chartDuration <= 90 * oneDayMs) {
-        resolution = '15';
-        intervalName = '15min';
-        console.log(`Fetching 15-minute Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      // For extremely large windows, use daily data
-      else {
-        resolution = 'D';
-        intervalName = 'daily';
-        console.log(`Fetching daily Finnhub data for ${symbol} (${Math.ceil(chartDuration / oneDayMs)} day chart window)`);
-      }
-      
       const candles = await this.getStockCandles(symbol, resolution, fromTimestamp, toTimestamp, userId);
 
       return {
         type: resolution === 'D' ? 'daily' : 'intraday',
         interval: intervalName,
+        resolution,
         candles: candles,
         source: 'finnhub'
       };

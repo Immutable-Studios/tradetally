@@ -57,8 +57,12 @@ class ChartService {
   // Get chart data for a trade
   // When billing is enabled (tradetally.io): Finnhub only, Pro users only
   // When billing is disabled (self-hosted): Finnhub preferred, Alpha Vantage fallback, all users
-  static async getTradeChartData(userId, symbol, entryDate, exitDate = null, hostHeader = null) {
+  static async getTradeChartData(userId, symbol, entryDate, exitDate = null, hostHeader = null, options = {}) {
     try {
+      // options.resolution: 'D' (daily) or '5' (5-minute). When null/undefined,
+      // providers fall back to legacy auto-selection based on trade duration.
+      const resolution = options.resolution || null;
+
       // Crypto symbols always use CoinGecko regardless of tier/billing
       if (finnhub.isCryptoSymbol(symbol)) {
         console.log(`[CHART] ${symbol} is crypto, using CoinGecko`);
@@ -86,14 +90,14 @@ class ChartService {
         }
 
         console.log('Using Finnhub for Pro user chart data (billing enabled)');
-        return await finnhub.getTradeChartData(symbol, entryDate, exitDate, userId);
+        return await finnhub.getTradeChartData(symbol, entryDate, exitDate, userId, { resolution });
       }
 
       // Self-hosted mode: Finnhub preferred with Alpha Vantage fallback
       if (isProUser && finnhub.isConfigured()) {
         console.log('Using Finnhub for chart data (self-hosted)');
         try {
-          return await finnhub.getTradeChartData(symbol, entryDate, exitDate, userId);
+          return await finnhub.getTradeChartData(symbol, entryDate, exitDate, userId, { resolution });
         } catch (error) {
           console.warn(`Finnhub failed for symbol ${symbol}: ${error.message}`);
 
@@ -101,7 +105,7 @@ class ChartService {
           if (alphaVantage.isConfigured()) {
             console.warn(`Falling back to Alpha Vantage due to Finnhub failure (${error.message})`);
             try {
-              const chartData = await alphaVantage.getTradeChartData(symbol, entryDate, exitDate);
+              const chartData = await alphaVantage.getTradeChartData(symbol, entryDate, exitDate, { resolution });
               chartData.source = 'alphavantage';
               chartData.fallback = true;
               chartData.fallbackReason = 'Finnhub unavailable';
@@ -122,7 +126,7 @@ class ChartService {
       // Self-hosted: Finnhub not configured, use Alpha Vantage
       if (alphaVantage.isConfigured()) {
         console.log('Using Alpha Vantage for chart data (self-hosted)');
-        const chartData = await alphaVantage.getTradeChartData(symbol, entryDate, exitDate);
+        const chartData = await alphaVantage.getTradeChartData(symbol, entryDate, exitDate, { resolution });
         chartData.source = 'alphavantage';
         return chartData;
       }
