@@ -180,6 +180,7 @@ const isOptionTrade = computed(() => tradeInfo.value?.instrumentType === 'option
 
 const getSourceLabel = (s) => {
   switch (s) {
+    case 'schwab': return 'Schwab'
     case 'finnhub': return 'Finnhub'
     case 'alphavantage': return 'Alpha Vantage'
     case 'alphavantage_cache': return 'Alpha Vantage (cached)'
@@ -190,6 +191,7 @@ const getSourceLabel = (s) => {
 
 const getSourceBadgeClass = (s) => {
   switch (s) {
+    case 'schwab': return 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200'
     case 'finnhub': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
     case 'alphavantage':
     case 'alphavantage_cache': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'

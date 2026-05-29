@@ -1,6 +1,7 @@
 const TierService = require('./tierService');
 const finnhub = require('../utils/finnhub');
 const alphaVantage = require('../utils/alphaVantage');
+const schwabMarketData = require('../utils/schwabMarketData');
 const axios = require('axios');
 
 class ChartService {
@@ -91,6 +92,22 @@ class ChartService {
 
         console.log('Using Finnhub for Pro user chart data (billing enabled)');
         return await finnhub.getTradeChartData(symbol, entryDate, exitDate, userId, { resolution });
+      }
+
+      // Self-hosted mode: prefer Schwab market data when the user has a
+      // connected Schwab account (uses their own OAuth token, no extra API key
+      // or premium plan). Falls back to Finnhub/Alpha Vantage if Schwab market
+      // data is unavailable (no connection, expired token, missing the Schwab
+      // "Market Data Production" product, or no candles in range).
+      try {
+        const schwabData = await schwabMarketData.getTradeChartData(symbol, entryDate, exitDate, { resolution });
+        if (schwabData && schwabData.candles && schwabData.candles.length > 0) {
+          console.log(`Using Schwab market data for chart data (self-hosted), ${schwabData.candles.length} candles`);
+          return schwabData;
+        }
+        console.log('Schwab market data unavailable or empty, falling back to Finnhub/Alpha Vantage');
+      } catch (schwabError) {
+        console.warn(`Schwab market data failed for ${symbol}, falling back: ${schwabError.message}`);
       }
 
       // Self-hosted mode: Finnhub preferred with Alpha Vantage fallback
