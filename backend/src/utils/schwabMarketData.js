@@ -396,6 +396,74 @@ class SchwabMarketData {
   }
 
   /**
+   * Get trade chart data using Schwab price history.
+   *
+   * Mirrors the response contract used by finnhub.getTradeChartData and
+   * alphaVantage.getTradeChartData so ChartService and the frontend can treat
+   * Schwab as a drop-in chart-data provider.
+   *
+   * Returns null (never throws) when Schwab market data is unavailable
+   * (no connection, token expired, missing Market Data product, or no candles
+   * in range) so callers can fall back to other providers gracefully.
+   *
+   * @param {string} symbol - Stock/ETF symbol
+   * @param {string|Date} entryDate - Trade entry date/time
+   * @param {string|Date|null} exitDate - Trade exit date/time (defaults to now)
+   * @param {object} options - { resolution: 'D' | '5' }
+   * @returns {Promise<object|null>} { type, interval, resolution, candles, source } or null
+   */
+  async getTradeChartData(symbol, entryDate, exitDate = null, options = {}) {
+    const resolution = options.resolution === '5' ? '5' : 'D';
+
+    const entryTime = new Date(entryDate);
+    const exitTime = exitDate ? new Date(exitDate) : new Date();
+    if (isNaN(entryTime.getTime())) {
+      console.warn(`[SCHWAB-MARKET] Invalid entry date for ${symbol}, skipping Schwab chart data`);
+      return null;
+    }
+
+    const oneDayMs = 24 * 60 * 60 * 1000;
+
+    // Normalize to UTC midnight of the trade day(s), matching finnhub's windowing.
+    const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
+    const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
+
+    let fromMs, toMs, intervalName;
+
+    if (resolution === '5') {
+      // 5-minute chart: focus on the trade day(s) with extended trading hours.
+      // ~04:00 ET (09:00 UTC) on the entry day through ~20:00 ET (01:00 UTC next
+      // day) on the exit day. ET approximated as UTC-5 for simplicity.
+      intervalName = '5min';
+      fromMs = entryDateUTC.getTime() + 9 * 60 * 60 * 1000;
+      toMs = exitDateUTC.getTime() + 25 * 60 * 60 * 1000;
+    } else {
+      // Daily chart: broad context, ~90 days before entry through ~14 days after
+      // exit (capped at now).
+      intervalName = 'daily';
+      fromMs = entryDateUTC.getTime() - 90 * oneDayMs;
+      toMs = Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now());
+    }
+
+    const fromTimestamp = Math.floor(fromMs / 1000);
+    const toTimestamp = Math.floor(toMs / 1000);
+
+    const candles = await this.getCandles(symbol, resolution, fromTimestamp, toTimestamp);
+
+    if (!candles || candles.length === 0) {
+      return null;
+    }
+
+    return {
+      type: resolution === 'D' ? 'daily' : 'intraday',
+      interval: intervalName,
+      resolution,
+      candles,
+      source: 'schwab'
+    };
+  }
+
+  /**
    * Get daily price history for a symbol
    * @param {string} symbol - Stock/ETF symbol
    * @param {number} days - Number of days of history (default 30)
