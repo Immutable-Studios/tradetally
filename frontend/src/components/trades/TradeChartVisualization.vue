@@ -201,24 +201,16 @@ const getSourceBadgeClass = (s) => {
 
 const formatNumber = (num) => parseFloat(num || 0).toFixed(2)
 
-// Parse a datetime string to a Unix timestamp (seconds) without timezone conversion,
-// mirroring how the chart candles are keyed.
+// Parse a stored datetime (UTC, as the rest of the app treats execution times)
+// into a Unix timestamp in seconds. Candle timestamps are true UTC epoch seconds
+// (provider `datetime`/1000) and LightweightCharts plots them in UTC, so markers
+// must use the same UTC instant — NOT the viewer's wall-clock — to land on the
+// correct candle.
 const parseDateTimeToTimestamp = (dateStr) => {
   if (!dateStr) return null
-  try {
-    const str = dateStr.toString()
-    const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/)
-    if (isoMatch) {
-      const [, year, month, day, hour, minute, second] = isoMatch.map(Number)
-      return Math.floor(new Date(year, month - 1, day, hour, minute, second).getTime() / 1000)
-    }
-    const dateObj = new Date(dateStr)
-    if (isNaN(dateObj.getTime())) return null
-    return Math.floor(dateObj.getTime() / 1000)
-  } catch (err) {
-    console.error('Error parsing datetime to timestamp:', err, 'for date:', dateStr)
-    return null
-  }
+  const ms = Date.parse(dateStr)
+  if (Number.isNaN(ms)) return null
+  return Math.floor(ms / 1000)
 }
 
 // Validate, dedupe and sort candles for LightweightCharts (which requires
@@ -238,69 +230,101 @@ const prepareCandles = (rawCandles) => {
   return Array.from(byTime.values()).sort((a, b) => a.time - b.time)
 }
 
+// Classify an execution as a buy (green entry-style arrow) or sell (red arrow).
+// Mirrors the backend P&L engine's action parsing: buy/bot/long ⇒ buy,
+// sell/sold/short/sld ⇒ sell. Brokers like Schwab store `side` as the position
+// direction ('long' on the opening fill, 'short' on the closing fill) with no
+// `action`, so a naive `includes('buy')` check misclassified every fill as a
+// SELL. Fall back to the entry/exit `type` combined with the trade side.
+const executionIsBuy = (ex, tradeSide) => {
+  const explicit = (ex.action || ex.side || '').toString().toLowerCase()
+  if (/\b(buy|bot|long)\b/.test(explicit)) return true
+  if (/\b(sell|sold|short|sld)\b/.test(explicit)) return false
+  const type = (ex.type || '').toString().toLowerCase()
+  if (type === 'entry') return tradeSide !== 'short'
+  if (type === 'exit') return tradeSide === 'short'
+  return tradeSide !== 'short'
+}
+
 // Build entry/exit markers from the trade's executions (preferred) or, when
 // no executions are available, from the entry/exit summary fields.
-const buildMarkers = (trade, candles) => {
+const buildMarkers = (trade, candles, isDaily) => {
   if (!trade || candles.length === 0) return []
   const symbol = currencySymbol.value
   const isOption = trade.instrumentType === 'option'
-  const nearestCandle = (ts) => candles.reduce((closest, c) =>
-    Math.abs(c.time - ts) < Math.abs(closest.time - ts) ? c : closest
-  )
+  const tradeSide = (trade.side || '').toString().toLowerCase()
+
+  const utcDayKey = (epochSec) => {
+    const d = new Date(epochSec * 1000)
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  }
+
+  // Snap a marker timestamp to a real candle. Daily candles are one per day, so
+  // an intraday execution's UTC instant can sit closer to the *next* day's
+  // candle — match by UTC calendar day instead. Intraday snaps to the nearest.
+  const snapToCandle = (ts) => {
+    if (ts == null) return null
+    if (isDaily) {
+      const day = utcDayKey(ts)
+      const sameDay = candles.find((c) => utcDayKey(c.time) === day)
+      if (sameDay) return sameDay
+    }
+    return candles.reduce((closest, c) =>
+      Math.abs(c.time - ts) < Math.abs(closest.time - ts) ? c : closest
+    )
+  }
 
   const markers = []
+  const addMarker = (ts, price, isBuy, qty) => {
+    const candle = snapToCandle(ts)
+    if (!candle) return
+    const priceLabel = isFinite(price) ? ` @ ${symbol}${formatNumber(price)}` : ''
+    const text = isOption
+      ? `${isBuy ? 'BUY' : 'SELL'}${qty ? ` ${qty}x` : ''}`
+      : `${isBuy ? 'BUY' : 'SELL'}${priceLabel}`
+    markers.push({
+      time: candle.time,
+      position: isBuy ? 'belowBar' : 'aboveBar',
+      color: isBuy ? '#10b981' : '#ef4444',
+      shape: isBuy ? 'arrowUp' : 'arrowDown',
+      text,
+      size: 2
+    })
+  }
+
   const executions = Array.isArray(trade.executions) ? trade.executions : []
 
-  if (executions.length > 0) {
+  // Grouped/round-trip executions carry both an entry and an exit on one row;
+  // emit a marker for each leg. Fill-based executions carry one fill per row.
+  const isGrouped = executions.some((ex) => ex && (
+    ex.entryPrice !== undefined || ex.entry_price !== undefined ||
+    ex.exitPrice !== undefined || ex.exit_price !== undefined
+  ))
+
+  if (executions.length > 0 && isGrouped) {
+    const entryIsBuy = tradeSide !== 'short'
     executions.forEach((ex) => {
-      const ts = parseDateTimeToTimestamp(ex.datetime || ex.entryTime || ex.entry_time)
-      if (!ts) return
-      const action = (ex.action || ex.side || '').toString().toLowerCase()
-      const isBuy = action.includes('buy')
-      const price = parseFloat(ex.price)
+      if (!ex) return
       const qty = ex.quantity
-      const candle = nearestCandle(ts)
-      const priceLabel = isFinite(price) ? ` @ ${symbol}${formatNumber(price)}` : ''
-      const text = isOption
-        ? `${isBuy ? 'BUY' : 'SELL'}${qty ? ` ${qty}x` : ''}`
-        : `${isBuy ? 'BUY' : 'SELL'}${priceLabel}`
-      markers.push({
-        time: candle.time,
-        position: isBuy ? 'belowBar' : 'aboveBar',
-        color: isBuy ? '#10b981' : '#ef4444',
-        shape: isBuy ? 'arrowUp' : 'arrowDown',
-        text,
-        size: 2
-      })
+      const entryTs = parseDateTimeToTimestamp(ex.entryTime || ex.entry_time)
+      if (entryTs != null) addMarker(entryTs, parseFloat(ex.entryPrice ?? ex.entry_price), entryIsBuy, qty)
+      const exitTs = parseDateTimeToTimestamp(ex.exitTime || ex.exit_time)
+      if (exitTs != null) addMarker(exitTs, parseFloat(ex.exitPrice ?? ex.exit_price), !entryIsBuy, qty)
+    })
+  } else if (executions.length > 0) {
+    executions.forEach((ex) => {
+      if (!ex) return
+      const ts = parseDateTimeToTimestamp(ex.datetime || ex.entryTime || ex.entry_time || ex.exitTime || ex.exit_time)
+      if (ts == null) return
+      const price = parseFloat(ex.price ?? ex.entryPrice ?? ex.entry_price ?? ex.exitPrice ?? ex.exit_price)
+      addMarker(ts, price, executionIsBuy(ex, tradeSide), ex.quantity)
     })
   } else {
-    const isShort = (trade.side || '').toLowerCase() === 'short'
+    const isShort = tradeSide === 'short'
     const entryTs = parseDateTimeToTimestamp(trade.entryTime || trade.entryDate)
-    if (entryTs) {
-      const candle = nearestCandle(entryTs)
-      const price = parseFloat(trade.entryPrice)
-      markers.push({
-        time: candle.time,
-        position: 'belowBar',
-        color: '#10b981',
-        shape: 'arrowUp',
-        text: `${isShort ? 'SELL' : 'BUY'}${isFinite(price) ? ` @ ${symbol}${formatNumber(price)}` : ''}`,
-        size: 2
-      })
-    }
+    if (entryTs != null) addMarker(entryTs, parseFloat(trade.entryPrice), !isShort, trade.quantity)
     const exitTs = parseDateTimeToTimestamp(trade.exitTime)
-    if (exitTs) {
-      const candle = nearestCandle(exitTs)
-      const price = parseFloat(trade.exitPrice)
-      markers.push({
-        time: candle.time,
-        position: 'aboveBar',
-        color: '#ef4444',
-        shape: 'arrowDown',
-        text: `${isShort ? 'BUY' : 'SELL'}${isFinite(price) ? ` @ ${symbol}${formatNumber(price)}` : ''}`,
-        size: 2
-      })
-    }
+    if (exitTs != null) addMarker(exitTs, parseFloat(trade.exitPrice), isShort, trade.quantity)
   }
 
   // LightweightCharts requires markers in ascending time order
@@ -345,7 +369,8 @@ const renderChart = (container, data) => {
 
   series.setData(candles)
 
-  const markers = buildMarkers(data.trade, candles)
+  const isDaily = data.resolution === 'D' || data.type === 'daily' || data.interval === 'daily'
+  const markers = buildMarkers(data.trade, candles, isDaily)
   if (markers.length > 0) {
     try {
       series.setMarkers(markers)
