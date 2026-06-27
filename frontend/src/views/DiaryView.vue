@@ -97,15 +97,17 @@
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Type
           </label>
-          <select
-            v-model="filters.entryType"
-            @change="applyFilters"
-            class="input text-sm"
-          >
-            <option value="">All Types</option>
-            <option value="diary">Diary</option>
-            <option value="playbook">Playbook</option>
-          </select>
+          <div class="text-sm">
+            <BaseSelect
+              v-model="filters.entryType"
+              @change="applyFilters"
+              placeholder="All Types"
+              :options="[
+                { value: 'diary', label: 'Diary' },
+                { value: 'playbook', label: 'Playbook' }
+              ]"
+            />
+          </div>
         </div>
 
         <!-- Market Bias Filter -->
@@ -113,16 +115,18 @@
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Market Bias
           </label>
-          <select
-            v-model="filters.marketBias"
-            @change="applyFilters"
-            class="input text-sm"
-          >
-            <option value="">All Bias</option>
-            <option value="bullish">Bullish</option>
-            <option value="bearish">Bearish</option>
-            <option value="neutral">Neutral</option>
-          </select>
+          <div class="text-sm">
+            <BaseSelect
+              v-model="filters.marketBias"
+              @change="applyFilters"
+              placeholder="All Bias"
+              :options="[
+                { value: 'bullish', label: 'Bullish' },
+                { value: 'bearish', label: 'Bearish' },
+                { value: 'neutral', label: 'Neutral' }
+              ]"
+            />
+          </div>
         </div>
 
         <!-- Date Range Filter -->
@@ -197,9 +201,18 @@
     </div>
 
     <!-- Content Area -->
-    <div class="min-h-96">
-      <!-- Loading State -->
-      <div v-if="loading" class="flex justify-center py-12">
+    <div class="min-h-96 relative">
+      <!-- Subtle refresh indicator: filter changes refetch without unmounting
+           content, so scroll position is preserved (see CLAUDE.md pattern) -->
+      <div v-if="loading && !initialLoading" class="absolute top-0 right-0 z-10">
+        <div class="flex items-center space-x-2 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm border border-gray-200 dark:border-gray-700">
+          <div class="animate-spin rounded-full h-4 w-4 border-2 border-primary-600 border-t-transparent"></div>
+          <span class="text-xs text-gray-600 dark:text-gray-400">Updating...</span>
+        </div>
+      </div>
+
+      <!-- Loading State (initial load only) -->
+      <div v-if="initialLoading" class="flex justify-center py-12">
         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
       </div>
 
@@ -262,6 +275,8 @@
               <router-link
                 :to="`/diary/${entry.id}/edit`"
                 class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                aria-label="Edit entry"
+                title="Edit entry"
               >
                 <PencilIcon class="w-4 h-4" />
               </router-link>
@@ -269,6 +284,8 @@
               <button
                 @click="confirmDelete(entry)"
                 class="text-gray-400 hover:text-red-600 dark:hover:text-red-400"
+                aria-label="Delete entry"
+                title="Delete entry"
               >
                 <TrashIcon class="w-4 h-4" />
               </button>
@@ -588,6 +605,7 @@ import TemplateManager from '@/components/diary/TemplateManager.vue'
 import LinkedTradesList from '@/components/diary/LinkedTradesList.vue'
 import WatchlistSymbol from '@/components/diary/WatchlistSymbol.vue'
 import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 import {
   PlusIcon,
   PencilIcon,
@@ -637,6 +655,8 @@ const filters = ref(savedFilters ? JSON.parse(savedFilters) : {
 const entries = computed(() => diaryStore.entries)
 const loading = computed(() => diaryStore.loading)
 const error = computed(() => diaryStore.error)
+// Full-page spinner only on first load; refetches keep content mounted.
+const initialLoading = ref(true)
 const pagination = computed(() => diaryStore.pagination)
 
 const hasActiveFilters = computed(() => {
@@ -875,6 +895,8 @@ const loadEntries = async () => {
     await diaryStore.fetchEntries({ page: 1 })
   } catch (error) {
     console.error('Error loading entries:', error)
+  } finally {
+    initialLoading.value = false
   }
 }
 

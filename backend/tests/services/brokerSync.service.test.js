@@ -17,7 +17,8 @@ jest.mock('../../src/models/BrokerConnection', () => ({
 }));
 
 jest.mock('../../src/services/analyticsCache', () => ({
-  invalidateUserCache: jest.fn()
+  invalidateUserCache: jest.fn(),
+  invalidate: jest.fn()
 }));
 
 jest.mock('../../src/utils/cache', () => ({
@@ -31,6 +32,7 @@ jest.mock('../../src/config/database', () => ({
 
 const Trade = require('../../src/models/Trade');
 const db = require('../../src/config/database');
+const { parseCSV } = require('../../src/utils/csvParser');
 const ibkrService = require('../../src/services/brokerSync/ibkrService');
 const schwabService = require('../../src/services/brokerSync/schwabService');
 const alpacaService = require('../../src/services/brokerSync/alpacaService');
@@ -145,6 +147,213 @@ describe('broker sync duplicate protection', () => {
     });
     expect(params).not.toHaveProperty('fd');
     expect(params).not.toHaveProperty('td');
+  });
+
+  test('IBKR sync adds transferred stock Open Positions rows before import', async () => {
+    const csv = [
+      'Statement,Header,Field Name,Field Value',
+      'Statement,Data,Title,Activity Statement',
+      'Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,CostBasisPrice,CostBasisMoney,Account,Conid',
+      'Open Positions,Data,Summary,Stocks,USD,AMC,10,5.50,55,U123,265598'
+    ].join('\n');
+
+    parseCSV.mockResolvedValueOnce({ trades: [] });
+    const requestSpy = jest.spyOn(ibkrService, 'requestFlexReport').mockResolvedValue({ referenceCode: 'ref-1' });
+    const fetchSpy = jest.spyOn(ibkrService, 'fetchFlexReport').mockResolvedValue(csv);
+    const context = { existingPositions: {}, existingExecutions: {}, userId: 'user-1' };
+    const contextSpy = jest.spyOn(ibkrService, 'getExistingContext').mockResolvedValue(context);
+    const importSpy = jest.spyOn(ibkrService, 'importTrades').mockResolvedValue({
+      imported: 1,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      duplicates: 0
+    });
+
+    try {
+      const result = await ibkrService.syncTrades({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerType: 'ibkr',
+        ibkrFlexToken: 'token',
+        ibkrFlexQueryId: 'query'
+      }, { endDate: '2026-06-19' });
+
+      expect(importSpy).toHaveBeenCalledWith(
+        'user-1',
+        [
+          expect.objectContaining({
+            symbol: 'AMC',
+            side: 'long',
+            quantity: 10,
+            entryPrice: 5.5,
+            brokerConnectionId: 'conn-1',
+            accountIdentifier: 'U123',
+            conid: '265598',
+            instrumentType: 'stock',
+            isSyntheticOpenPosition: true
+          })
+        ],
+        context
+      );
+      expect(result).toMatchObject({
+        imported: 1,
+        openPositionsParsed: 1
+      });
+    } finally {
+      requestSpy.mockRestore();
+      fetchSpy.mockRestore();
+      contextSpy.mockRestore();
+      importSpy.mockRestore();
+    }
+  });
+
+  test('IBKR sync returns manual review items from the parser', async () => {
+    const csv = [
+      'Symbol,Quantity,Buy/Sell,Price,Date/Time,Commission,LevelOfDetail,TradeID,Conid,AssetClass',
+      'IBKR,0.0228,SELL,81.67,2026-04-20 10:25:08,-0.018663565,EXECUTION,9349469033,43645865,STK'
+    ].join('\n');
+    const reviewItem = {
+      review_type: 'ambiguous_sell_only_stock',
+      symbol: 'IBKR',
+      quantity: 0.0228,
+      price: 81.67,
+      action: 'sell'
+    };
+
+    parseCSV.mockResolvedValueOnce({
+      trades: [],
+      manualReviewItems: [reviewItem],
+      diagnostics: { warnings: ['1 sell-only stock execution requires manual review before importing.'] }
+    });
+    const requestSpy = jest.spyOn(ibkrService, 'requestFlexReport').mockResolvedValue({ referenceCode: 'ref-1' });
+    const fetchSpy = jest.spyOn(ibkrService, 'fetchFlexReport').mockResolvedValue(csv);
+    const context = { existingPositions: {}, existingExecutions: {}, userId: 'user-1' };
+    const contextSpy = jest.spyOn(ibkrService, 'getExistingContext').mockResolvedValue(context);
+    const importSpy = jest.spyOn(ibkrService, 'importTrades').mockResolvedValue({
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      duplicates: 0
+    });
+
+    try {
+      const result = await ibkrService.syncTrades({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerType: 'ibkr',
+        ibkrFlexToken: 'token',
+        ibkrFlexQueryId: 'query'
+      });
+
+      expect(parseCSV).toHaveBeenCalledWith(
+        Buffer.from(csv, 'utf8'),
+        'ibkr',
+        expect.objectContaining({
+          brokerConnectionId: 'conn-1',
+          brokerType: 'ibkr'
+        })
+      );
+      expect(importSpy).toHaveBeenCalledWith('user-1', [], context);
+      expect(result).toMatchObject({
+        imported: 0,
+        manualReviewCount: 1,
+        manualReviewItems: [reviewItem]
+      });
+    } finally {
+      requestSpy.mockRestore();
+      fetchSpy.mockRestore();
+      contextSpy.mockRestore();
+      importSpy.mockRestore();
+    }
+  });
+
+  test('IBKR self-describing stock Open Positions derive entry price from total basis', () => {
+    const csv = [
+      'ClientAccountID,AssetClass,Symbol,Position,CostBasisMoney,Conid',
+      'U123,STK,NVDA,4,1000,4815747'
+    ].join('\n');
+
+    const result = ibkrService.extractOpenPositionTrades(
+      csv,
+      { id: 'conn-1', brokerType: 'ibkr' },
+      { existingPositions: {}, existingExecutions: {} },
+      { endDate: '2026-06-19' }
+    );
+
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]).toEqual(expect.objectContaining({
+      symbol: 'NVDA',
+      quantity: 4,
+      entryPrice: 250,
+      accountIdentifier: 'U123',
+      conid: '4815747',
+      instrumentType: 'stock',
+      isSyntheticOpenPosition: true
+    }));
+  });
+
+  test('IBKR self-describing Trades sections are not treated as Open Positions', () => {
+    const tradesSectionCsv = [
+      'ClientAccountID,AccountAlias,AssetClass,Symbol,Conid,TradeID,DateTime,Quantity,TradePrice,CostBasis,Buy/Sell,LevelOfDetail',
+      'U123,Main,OPT,NVDA,111,trade-1,2026-06-19;093000,1,2.08,208,BUY,EXECUTION',
+      'U123,Main,STK,QQQ,222,trade-2,2026-06-19;094500,100,450,45000,BUY,EXECUTION'
+    ].join('\n');
+
+    const result = ibkrService.extractOpenPositionTrades(
+      tradesSectionCsv,
+      { id: 'conn-1', brokerType: 'ibkr' },
+      { existingPositions: {}, existingExecutions: {} },
+      { endDate: '2026-06-19' }
+    );
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.warnings.join(' ')).toContain('did not include a recognized Open Positions stock section');
+  });
+
+  test('IBKR Open Positions skips option rows instead of importing them as underlying stocks', () => {
+    const csv = [
+      'ClientAccountID,AssetClass,Symbol,Position,CostBasisMoney,Conid',
+      'U123,OPT,NVDA,1,208,111111'
+    ].join('\n');
+
+    const result = ibkrService.extractOpenPositionTrades(
+      csv,
+      { id: 'conn-1', brokerType: 'ibkr' },
+      { existingPositions: {}, existingExecutions: {} },
+      { endDate: '2026-06-19' }
+    );
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.warnings.join(' ')).toContain('unsupported asset class for NVDA');
+  });
+
+  test('IBKR Open Positions rows are skipped when an existing stock position matches by conid', () => {
+    const csv = [
+      'Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,CostBasisPrice,CostBasisMoney,Account,Conid',
+      'Open Positions,Data,Summary,Stocks,USD,AMC,10,5.50,55,U123,265598'
+    ].join('\n');
+
+    const result = ibkrService.extractOpenPositionTrades(
+      csv,
+      { id: 'conn-1', brokerType: 'ibkr' },
+      {
+        existingPositions: {
+          conid_265598: {
+            symbol: 'AMC',
+            conid: '265598',
+            instrumentType: 'stock',
+            accountIdentifier: 'U123'
+          }
+        },
+        existingExecutions: {}
+      },
+      { endDate: '2026-06-19' }
+    );
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.warnings).toEqual([]);
   });
 
   test('Schwab importTrades skips a trade already imported by a previous sync', async () => {
@@ -278,6 +487,133 @@ describe('broker sync duplicate protection', () => {
       exitPrice: 7.235,
       pnl: 39.5
     });
+  });
+
+  test('Schwab option transactions save the underlying ticker and option metadata', () => {
+    const parsed = schwabService.parseTransactionDetails({
+      type: 'TRADE',
+      orderId: 'option-buy-1',
+      tradeDate: '2026-05-27',
+      time: '2026-05-27T14:30:00Z',
+      transferItems: [
+        {
+          instrument: {
+            assetType: 'OPTION',
+            symbol: 'SPY 260527C00753000'
+          },
+          price: 1.25,
+          amount: 1,
+          positionEffect: 'OPENING'
+        }
+      ]
+    });
+
+    expect(parsed).toMatchObject({
+      symbol: 'SPY',
+      matchingSymbol: 'SPY 260527C00753000',
+      instrumentType: 'option',
+      underlyingSymbol: 'SPY',
+      optionType: 'call',
+      strikePrice: 753,
+      expirationDate: '2026-05-27'
+    });
+  });
+
+  test('Schwab option grouping keeps different contracts separate after symbol normalization', () => {
+    const schwabOptionTrade = ({ orderId, symbol, time, price, amount, positionEffect }) => ({
+      type: 'TRADE',
+      orderId,
+      tradeDate: time.split('T')[0],
+      time,
+      transferItems: [
+        {
+          instrument: {
+            assetType: 'OPTION',
+            symbol
+          },
+          price,
+          amount,
+          positionEffect
+        }
+      ]
+    });
+
+    const trades = schwabService.parseTransactions([
+      schwabOptionTrade({
+        orderId: 'open-753',
+        symbol: 'SPY 260527C00753000',
+        time: '2026-05-27T14:30:00Z',
+        price: 1.25,
+        amount: 1,
+        positionEffect: 'OPENING'
+      }),
+      schwabOptionTrade({
+        orderId: 'close-753',
+        symbol: 'SPY 260527C00753000',
+        time: '2026-05-27T15:00:00Z',
+        price: 1.5,
+        amount: -1,
+        positionEffect: 'CLOSING'
+      }),
+      schwabOptionTrade({
+        orderId: 'open-754',
+        symbol: 'SPY 260527C00754000',
+        time: '2026-05-27T15:30:00Z',
+        price: 1.1,
+        amount: 1,
+        positionEffect: 'OPENING'
+      }),
+      schwabOptionTrade({
+        orderId: 'close-754',
+        symbol: 'SPY 260527C00754000',
+        time: '2026-05-27T16:00:00Z',
+        price: 1.35,
+        amount: -1,
+        positionEffect: 'CLOSING'
+      })
+    ]);
+
+    expect(trades).toHaveLength(2);
+    expect(trades.map(trade => trade.symbol)).toEqual(['SPY', 'SPY']);
+    expect(trades.map(trade => trade.strikePrice).sort((a, b) => a - b)).toEqual([753, 754]);
+    expect(trades.every(trade => trade.instrumentType === 'option')).toBe(true);
+  });
+
+  test('Schwab duplicate detection recognizes previously synced full option symbols', () => {
+    const isDuplicate = schwabService.isDuplicateTrade(
+      {
+        symbol: 'SPY',
+        matchingSymbol: 'SPY 260527C00753000',
+        side: 'long',
+        quantity: 1,
+        entryPrice: 1.25,
+        exitPrice: 1.5,
+        pnl: 25,
+        tradeDate: '2026-05-27',
+        instrumentType: 'option',
+        underlyingSymbol: 'SPY',
+        optionType: 'call',
+        strikePrice: 753,
+        expirationDate: '2026-05-27'
+      },
+      [
+        {
+          symbol: 'SPY 260527C00753000',
+          side: 'long',
+          quantity: 1,
+          entry_price: 1.25,
+          exit_price: 1.5,
+          pnl: 25,
+          trade_date: '2026-05-27',
+          instrument_type: 'option',
+          option_type: 'call',
+          strike_price: 753,
+          expiration_date: '2026-05-27'
+        }
+      ]
+    );
+
+    expect(isDuplicate).toBe(true);
   });
 
   test('generic OAuth broker fill pairing closes long trades instead of marking sells as shorts', () => {

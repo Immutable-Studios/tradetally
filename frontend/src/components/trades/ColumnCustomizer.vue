@@ -78,16 +78,19 @@
 
               <!-- Column Width Selector (for visible columns) -->
               <div v-if="column.visible && !isRequiredColumn(column.key)" class="flex items-center space-x-2">
-                <select
-                  v-model="column.width"
-                  @change="updateColumns"
-                  class="text-xs pl-2 pr-6 py-1 border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-300"
-                >
-                  <option value="auto">Auto</option>
-                  <option value="sm">Small</option>
-                  <option value="md">Medium</option>
-                  <option value="lg">Large</option>
-                </select>
+                <div class="w-28">
+                  <BaseSelect
+                    v-model="column.width"
+                    @change="updateColumns"
+                    :searchable="false"
+                    :options="[
+                      { value: 'auto', label: 'Auto' },
+                      { value: 'sm', label: 'Small' },
+                      { value: 'md', label: 'Medium' },
+                      { value: 'lg', label: 'Large' }
+                    ]"
+                  />
+                </div>
               </div>
             </div>
             </div>
@@ -137,6 +140,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { AdjustmentsHorizontalIcon } from '@heroicons/vue/24/outline'
 import { Bars3Icon } from '@heroicons/vue/24/solid'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const uiPreferencesStore = useUiPreferencesStore()
 
@@ -166,7 +170,7 @@ const defaultColumns = [
   { key: 'exit', label: 'Exit', visible: true, width: 'auto' },
   { key: 'pnl', label: 'Net P&L', visible: true, width: 'auto' },
   { key: 'grossPnl', label: 'Gross P&L', visible: true, width: 'auto' },
-  { key: 'unrealizedPnl', label: 'Unrealized', visible: false, width: 'auto' },
+  { key: 'unrealizedPnl', label: 'Unrealized', visible: true, width: 'auto' },
   { key: 'confidence', label: 'Confidence', visible: true, width: 'auto' },
   { key: 'quality', label: 'Quality', visible: true, width: 'auto' },
   { key: 'sector', label: 'Sector', visible: true, width: 'auto' },

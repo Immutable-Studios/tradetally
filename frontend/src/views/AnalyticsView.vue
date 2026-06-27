@@ -10,10 +10,33 @@
     <!-- Onboarding card removed - Analytics is no longer in the tour flow -->
 
     <div class="space-y-8">
-      <!-- Filters -->
+      <!-- Filters: collapsed by default so the charts (the point of this
+           page) aren't pushed below the fold by a permanently open panel. -->
       <div class="card">
         <div class="card-body">
-          <TradeFilters @filter="handleFilter" />
+          <button
+            type="button"
+            class="flex w-full items-center justify-between text-left"
+            :aria-expanded="filtersExpanded"
+            @click="filtersExpanded = !filtersExpanded"
+          >
+            <span class="inline-flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
+              <FunnelIcon class="h-4 w-4 text-gray-500 dark:text-gray-400" />
+              Filters
+              <span
+                v-if="activeFilterCount > 0"
+                class="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-primary-600 px-1.5 text-xs font-semibold text-white"
+              >{{ activeFilterCount }}</span>
+            </span>
+            <ChevronDownIcon
+              class="h-4 w-4 text-gray-500 transition-transform dark:text-gray-400"
+              :class="{ 'rotate-180': filtersExpanded }"
+            />
+          </button>
+
+          <div v-show="filtersExpanded" class="mt-4">
+            <TradeFilters @filter="handleFilter" />
+          </div>
 
           <!-- R-Value Mode Toggle -->
           <div class="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
@@ -97,15 +120,15 @@
       </div>
 
       <!-- Customization Mode Message -->
-      <div v-if="isCustomizing" class="card bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+      <div v-if="isCustomizing" class="card bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800">
         <div class="card-body">
           <div class="flex items-center gap-3">
-            <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-5 h-5 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div>
-              <p class="text-sm font-medium text-blue-900 dark:text-blue-100">Customization Mode Active</p>
-              <p class="text-xs text-blue-700 dark:text-blue-300 mt-1">Drag and drop chart sections to reorder them. Charts will auto-resize based on their width setting.</p>
+              <p class="text-sm font-medium text-primary-900 dark:text-primary-100">Customization Mode Active</p>
+              <p class="text-xs text-primary-700 dark:text-primary-300 mt-1">Drag and drop chart sections to reorder them. Charts will auto-resize based on their width setting.</p>
             </div>
           </div>
         </div>
@@ -173,118 +196,69 @@
             <!-- Overview Stats -->
             <template v-if="element.id === 'overview'">
               <!-- Overview Stats -->
-      <div class="flex-card-container">
-        <div class="card card-mobile-safe flex-1">
-          <div class="card-body">
-            <dt class="text-data-secondary truncate">
-              Total P&L{{ rValueMode ? ' (R-Trades)' : '' }}
-            </dt>
-            <dd class="mt-1 text-lg sm:text-xl lg:text-2xl font-semibold whitespace-nowrap" :class="[
-              displayOverview.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-            ]">
+      <div class="card overflow-hidden">
+        <dl class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 divide-y divide-gray-100 dark:divide-gray-800 lg:divide-y-0 lg:divide-x lg:divide-gray-200 lg:dark:divide-gray-700">
+          <!-- Total P&L -->
+          <div class="px-4 py-3.5">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">Total P&L</dt>
+            <dd class="mt-1 text-lg lg:text-xl font-semibold whitespace-nowrap" :class="displayOverview.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'">
               {{ formatCurrency(displayOverview.total_pnl) }}
             </dd>
           </div>
-        </div>
 
-        <div class="card card-mobile-safe flex-1">
-          <div class="card-body">
-            <dt class="text-data-secondary truncate">
-              Win Rate{{ rValueMode ? ' (R-Trades)' : '' }}
+          <!-- Win Rate -->
+          <div class="px-4 py-3.5">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">
+              Win Rate<span v-if="displayOverview.position_grouping" class="ml-1 normal-case text-primary-600 dark:text-primary-400">· whole trade</span>
             </dt>
-            <dd class="mt-1 text-lg sm:text-xl lg:text-2xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+            <dd class="mt-1 text-lg lg:text-xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
               {{ displayOverview.win_rate }}%<span class="ml-1 text-xs font-normal text-gray-500 dark:text-gray-400">incl. BE</span>
             </dd>
-            <dd
-              v-if="displayOverview.breakeven_trades > 0"
-              class="mt-0.5 text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap"
-            >
-              {{ displayOverview.win_rate_excluding_breakeven }}%<span class="ml-1 text-xs font-normal text-gray-500 dark:text-gray-400">excl. BE</span>
+            <dd v-if="displayOverview.breakeven_trades > 0" class="text-xs font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              {{ displayOverview.win_rate_excluding_breakeven }}% excl. BE
             </dd>
           </div>
-        </div>
 
-        <div class="card card-mobile-safe flex-1">
-          <div class="card-body">
-            <dt class="text-data-secondary truncate">
-              Total Trades{{ rValueMode ? ' (R-Trades)' : '' }}
-            </dt>
-            <dd class="mt-1 text-lg sm:text-xl lg:text-2xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
-              {{ displayOverview.total_trades }}
-            </dd>
+          <!-- Total Trades -->
+          <div class="px-4 py-3.5">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">Total Trades</dt>
+            <dd class="mt-1 text-lg lg:text-xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">{{ displayOverview.total_trades }}</dd>
           </div>
-        </div>
 
-        <div class="card card-mobile-safe flex-1">
-          <div class="card-body">
-            <dt class="text-data-secondary truncate">
-              {{ calculationMethod }} Trade{{ rValueMode ? ' (R-Trades)' : '' }}
-            </dt>
-            <dd class="mt-1 text-lg sm:text-xl lg:text-2xl font-semibold whitespace-nowrap" :class="[
-              displayOverview.avg_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-            ]">
+          <!-- Average / Median Trade -->
+          <div class="px-4 py-3.5">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">{{ calculationMethod }} Trade</dt>
+            <dd class="mt-1 text-lg lg:text-xl font-semibold whitespace-nowrap" :class="displayOverview.avg_pnl >= 0 ? 'text-green-600' : 'text-red-600'">
               {{ formatCurrency(displayOverview.avg_pnl) }}
             </dd>
           </div>
-        </div>
 
-        <div class="card card-mobile-safe flex-1">
-          <div class="card-body">
-            <dt class="text-data-secondary truncate">
-              Profit Factor{{ rValueMode ? ' (R-Trades)' : '' }}
-            </dt>
-            <dd class="mt-1 text-lg sm:text-xl lg:text-2xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
-              {{ displayOverview.profit_factor ?? '0.00' }}
-            </dd>
+          <!-- Profit Factor -->
+          <div class="px-4 py-3.5">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">Profit Factor</dt>
+            <dd class="mt-1 text-lg lg:text-xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">{{ displayOverview.profit_factor ?? '0.00' }}</dd>
           </div>
-        </div>
 
-        <div
-          class="card card-mobile-safe flex-1 cursor-pointer hover:shadow-lg transition-all duration-300 relative group"
-          @click="toggleRMultipleDisplay"
-          style="perspective: 1000px;"
-        >
+          <!-- R-Multiple (click to toggle Average / Total) -->
           <div
-            class="card-body relative transition-transform duration-500"
-            :style="{ transform: rMultipleFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)', transformStyle: 'preserve-3d' }"
+            class="px-4 py-3.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+            @click="toggleRMultipleDisplay"
+            title="Click to toggle Average / Total R"
           >
-            <!-- Front (Average R) -->
-            <div
-              v-show="!rMultipleFlipped"
-              style="backface-visibility: hidden;"
-            >
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
-                {{ calculationMethod }} R-Multiple
-                <span class="ml-1 text-xs text-gray-400">↻</span>
-              </dt>
-              <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">
+              {{ rMultipleFlipped ? 'Total R' : calculationMethod + ' R-Multiple' }}
+              <span class="ml-1 normal-case text-gray-400">↻</span>
+            </dt>
+            <transition name="r-fade" mode="out-in">
+              <dd v-if="!rMultipleFlipped" key="avg" class="mt-1 text-lg lg:text-xl font-semibold text-gray-900 dark:text-white whitespace-nowrap">
                 {{ overview.avg_r_value !== undefined && overview.avg_r_value !== null ? Number(overview.avg_r_value).toFixed(1) + 'R' : '0.0R' }}
               </dd>
-            </div>
-
-            <!-- Back (Total R) -->
-            <div
-              v-show="rMultipleFlipped"
-              class="absolute inset-0 p-6"
-              style="backface-visibility: hidden; transform: rotateY(180deg);"
-            >
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
-                Total R
-                <span class="ml-1 text-xs text-gray-400">↻</span>
-              </dt>
-              <dd class="mt-1 text-2xl font-semibold whitespace-nowrap" :class="[
-                (overview.total_r_value ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'
-              ]">
+              <dd v-else key="total" class="mt-1 text-lg lg:text-xl font-semibold whitespace-nowrap" :class="(overview.total_r_value ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'">
                 {{ overview.total_r_value !== undefined && overview.total_r_value !== null ? Number(overview.total_r_value).toFixed(2) + 'R' : '0.00R' }}
               </dd>
-            </div>
+            </transition>
           </div>
-
-          <!-- Click hint tooltip -->
-          <div class="absolute bottom-2 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-            <span class="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">Click to toggle</span>
-          </div>
-        </div>
+        </dl>
       </div>
 
       <!-- Equity Notice for K-Ratio -->
@@ -292,7 +266,7 @@
         <div class="card-body">
           <div class="flex items-start space-x-3">
             <div class="flex-shrink-0">
-              <svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
@@ -317,242 +291,80 @@
 
             <!-- Detailed Stats -->
             <template v-else-if="element.id === 'detailed-stats'">
-      <!-- Advanced Trading Metrics -->
-      <div class="card mb-8 relative overflow-visible">
-        <!-- Pro Tier Overlay for Free Users -->
-        <div v-if="isFreeTier" class="absolute inset-0 z-10 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm rounded-lg">
-          <div class="text-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md">
-            <svg class="mx-auto h-12 w-12 text-primary-600 dark:text-primary-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-            <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-2">Pro Feature</h3>
-            <p class="text-gray-600 dark:text-gray-400 mb-6">
-              Unlock advanced trading metrics including SQN, Kelly Criterion, K-Ratio, MAE/MFE, and more with Pro.
-            </p>
-            <router-link
-              to="/pricing"
-              class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-            >
-              Upgrade to Pro - {{ monthlyPricePerMonthLabel }}
-            </router-link>
+      <!-- Stats + Top Symbols side by side -->
+      <div class="grid grid-cols-1 gap-8 xl:grid-cols-3">
+      <!-- Stats -->
+      <div class="card xl:col-span-2">
+        <div class="card-body">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium text-gray-900 dark:text-white">Stats</h3>
+            <span
+              v-if="displayOverview.position_grouping"
+              class="text-xs font-normal text-primary-600 dark:text-primary-400"
+            >whole trade</span>
           </div>
-        </div>
 
-        <div class="card-body" :class="{ 'filter blur-sm pointer-events-none': isFreeTier }">
-          <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Advanced Trading Metrics</h3>
-          <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                System Quality Number
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ overview.sqn ?? '0.00' }} <span class="text-sm text-gray-500">(ratio)</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {{ getSQNInterpretation(overview.sqn) }}
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>System Quality Number (SQN)</strong><br>
-                  Measures the quality of your trading system by calculating ({{ calculationMethod }} Trade / Standard Deviation) × √Number of Trades. Higher values indicate more consistent performance.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+          <!-- Core stats (available to all users) -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
+            <div
+              v-for="row in freeStatRows"
+              :key="row.label"
+              class="flex items-center justify-between gap-3 py-2.5 border-b border-gray-100 dark:border-gray-800"
+            >
+              <span class="text-sm text-gray-500 dark:text-gray-400">{{ row.label }}</span>
+              <span
+                class="text-sm font-semibold whitespace-nowrap"
+                :class="row.class || 'text-gray-900 dark:text-white'"
+              >{{ row.display }}</span>
+            </div>
+          </div>
+
+          <!-- Advanced metrics (Pro) -->
+          <div class="relative mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+            <p class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Advanced Metrics</p>
+
+            <!-- Pro Tier Overlay for Free Users -->
+            <div v-if="isFreeTier" class="absolute inset-0 z-10 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm rounded-lg">
+              <div class="text-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md">
+                <svg class="mx-auto h-12 w-12 text-primary-600 dark:text-primary-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-2">Pro Feature</h3>
+                <p class="text-gray-600 dark:text-gray-400 mb-6">
+                  Unlock advanced trading metrics including SQN, Kelly Criterion, K-Ratio, MAE/MFE, and more with Pro.
+                </p>
+                <router-link
+                  to="/pricing"
+                  class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  Upgrade to Pro - {{ monthlyPricePerMonthLabel }}
+                </router-link>
               </div>
             </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                Probability of Random
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ overview.probability_random ?? 'N/A' }} <span class="text-sm text-gray-500">(probability)</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Statistical significance
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>Probability of Random</strong><br>
-                  The likelihood that your trading results could have occurred by random chance. Lower percentages indicate more statistically significant results.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-              </div>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                Kelly Percentage
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ overview.kelly_percentage ?? '0.00' }}% <span class="text-sm text-gray-500">(of capital)</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Optimal position size
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>Kelly Percentage</strong><br>
-                  The optimal percentage of your capital to risk per trade to maximize long-term growth, based on your win rate and average win/loss ratio.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-              </div>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                K-Ratio
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ overview.k_ratio ?? '0.00' }} <span class="text-sm text-gray-500">(ratio)</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                <span v-if="overview.k_ratio === '0.00'">
-                  Requires 3+ equity entries
-                </span>
-                <span v-else>
-                  {{ getKRatioInterpretation(overview.k_ratio) }} (equity-based)
-                </span>
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>K-Ratio</strong><br>
-                  Measures the consistency of your equity curve by calculating {{ calculationMethod }} Return / Standard Deviation of Returns. Higher values indicate smoother, more consistent performance.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-              </div>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate">
-                Total Commissions
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-red-600">
-                {{ formatCurrency(overview.total_commissions ?? 0) }}
-              </dd>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate">
-                Total Fees
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-red-600">
-                {{ formatCurrency(overview.total_fees ?? 0) }}
-              </dd>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                {{ calculationMethod }} Position MAE
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                <span v-if="overview.avg_mae !== 'N/A'">{{ formatCurrency(overview.avg_mae) }}</span>
-                <span v-else>{{ overview.avg_mae }}</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Max adverse excursion (est.)
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>Maximum Adverse Excursion (MAE)</strong><br>
-                  The largest unrealized loss your position experienced during the trade. Helps assess risk management and stop-loss placement.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-              </div>
-            </div>
-            
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 relative group">
-              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate cursor-help">
-                {{ calculationMethod }} Position MFE
-              </dt>
-              <dd class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                <span v-if="overview.avg_mfe !== 'N/A'">{{ formatCurrency(overview.avg_mfe) }}</span>
-                <span v-else>{{ overview.avg_mfe }}</span>
-              </dd>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Max favorable excursion (est.)
-              </p>
-              <!-- Tooltip -->
-              <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 delay-1500 z-10 w-64">
-                <div class="text-center">
-                  <strong>Maximum Favorable Excursion (MFE)</strong><br>
-                  The largest unrealized profit your position experienced during the trade. Helps assess profit-taking strategies and potential missed opportunities.
-                </div>
-                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+
+            <div
+              class="grid grid-cols-1 sm:grid-cols-2 gap-x-8"
+              :class="{ 'filter blur-sm pointer-events-none select-none': isFreeTier }"
+            >
+              <div
+                v-for="row in advancedStatRows"
+                :key="row.label"
+                class="flex items-center justify-between gap-3 py-2.5 border-b border-gray-100 dark:border-gray-800"
+                :title="row.tip"
+              >
+                <span class="text-sm text-gray-500 dark:text-gray-400 cursor-help">{{ row.label }}</span>
+                <span
+                  class="text-sm font-semibold whitespace-nowrap"
+                  :class="row.class || 'text-gray-900 dark:text-white'"
+                >{{ row.display }}</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Detailed Stats -->
-      <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
-        <!-- Win/Loss Breakdown -->
-        <div class="card">
-          <div class="card-body">
-            <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Win/Loss Breakdown</h3>
-            <div>
-              <!-- Column Headers -->
-              <div class="flex items-center justify-between pb-2 mb-2 border-b border-gray-200 dark:border-gray-700">
-                <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Metric</span>
-                <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Value</span>
-              </div>
-              
-              <!-- Data Rows -->
-              <div class="space-y-1">
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">Winning Trades</span>
-                  <span class="text-sm font-medium text-green-600">
-                    {{ displayOverview.winning_trades }} ({{ getWinPercentage() }}%)
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">Losing Trades</span>
-                  <span class="text-sm font-medium text-red-600">
-                    {{ displayOverview.losing_trades }} ({{ getLossPercentage() }}%)
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">Breakeven Trades</span>
-                  <span class="text-sm font-medium text-gray-500">
-                    {{ displayOverview.breakeven_trades }} ({{ getBreakevenPercentage() }}%)
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">{{ calculationMethod }} Win</span>
-                  <span class="text-sm font-medium text-green-600">
-                    {{ formatCurrency(displayOverview.avg_win) }}
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">{{ calculationMethod }} Loss</span>
-                  <span class="text-sm font-medium text-red-600">
-                    {{ formatCurrency(displayOverview.avg_loss, { abs: true }) }}
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">Best Trade</span>
-                  <span class="text-sm font-medium text-green-600">
-                    {{ formatCurrency(overview.best_trade) }}
-                  </span>
-                </div>
-                <div class="flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 rounded p-1 -m-1">
-                  <span class="text-sm text-gray-500 dark:text-gray-400">Worst Trade</span>
-                  <span class="text-sm font-medium text-red-600">
-                    {{ formatCurrency(overview.worst_trade) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Top Symbols -->
-        <div class="card">
+      <!-- Top Symbols -->
+      <div class="card xl:col-span-1">
           <div class="card-body">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Top Performing Symbols</h3>
             <div v-if="symbolStats.length === 0" class="text-center py-4 text-gray-500 dark:text-gray-400">
@@ -625,11 +437,17 @@
         <div class="card-body">
           <div class="flex items-center justify-between mb-4">
             <h3 class="heading-card">Performance Over Time</h3>
-            <select v-model="performancePeriod" @change="fetchPerformance" class="input w-auto">
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-            </select>
+            <div class="w-auto">
+              <BaseSelect
+                v-model="performancePeriod"
+                :options="[
+                  { value: 'daily', label: 'Daily' },
+                  { value: 'weekly', label: 'Weekly' },
+                  { value: 'monthly', label: 'Monthly' }
+                ]"
+                @change="fetchPerformance"
+              />
+            </div>
           </div>
           <div class="h-80">
             <PerformanceChart :data="performanceData" :r-value-mode="rValueMode" />
@@ -1032,7 +850,7 @@
 
             <!-- Strategy/Setup Performance -->
             <template v-else-if="element.id === 'strategy-performance'">
-      <div v-if="filteredStrategyStats.length > 0" class="card">
+      <div v-if="filteredStrategyStats.length > 0" id="strategies" class="card">
         <div class="card-body">
           <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Strategy/Setup Performance</h3>
           <div class="overflow-x-auto">
@@ -1307,6 +1125,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import api from '@/services/api'
+import { parseTradeDate } from '@/utils/date'
+import { FunnelIcon, ChevronDownIcon } from '@heroicons/vue/24/outline'
 import PerformanceChart from '@/components/charts/PerformanceChart.vue'
 import MdiIcon from '@/components/MdiIcon.vue'
 import NewsCorrelationAnalytics from '@/components/analytics/NewsCorrelationAnalytics.vue'
@@ -1317,6 +1137,7 @@ import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
 import AIReportRenderer from '@/components/ai/AIReportRenderer.vue'
 import AIConversationPanel from '@/components/ai/AIConversationPanel.vue'
 import StockLogo from '@/components/common/StockLogo.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 import { useAIStore } from '@/stores/ai'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
 import { usePricingExperiment } from '@/composables/usePricingExperiment'
@@ -1338,6 +1159,11 @@ import {
 const loading = ref(true)
 const initialLoading = ref(true) // Track initial load separately to preserve scroll on refresh
 const rValueMode = ref(false)
+
+// Filter panel collapse state + badge count (matches the Trades/Dashboard
+// labeled-button pattern).
+const filtersExpanded = ref(false)
+const activeFilterCount = ref(0)
 const rMultipleFlipped = ref(false)
 const performancePeriod = ref('daily')
 const userSettings = ref(null)
@@ -1399,6 +1225,7 @@ const localFilters = ref({
   startDate: '',
   endDate: '',
   strategies: [],
+  setups: [],
   sectors: [],
   tags: [],
   hasNews: '',
@@ -1426,6 +1253,7 @@ const filters = ref({
   startDate: '',
   endDate: '',
   strategies: '',
+  setups: '',
   sectors: '',
   tags: '',
   hasNews: '',
@@ -1582,43 +1410,12 @@ const filteredHourOfDayStats = computed(() => {
 })
 
 // Display overview - switches between regular and R-value filtered stats based on mode
-const displayOverview = computed(() => {
-  if (!rValueMode.value) {
-    return overview.value
-  }
-
-  // In R-value mode, use the R-specific stats from the backend
-  const rTotalTrades = overview.value.r_total_trades || 0
-  const rWinningTrades = overview.value.r_winning_trades || 0
-  const rLosingTrades = overview.value.r_losing_trades || 0
-  const rWinRate = rTotalTrades > 0 ? Math.round((rWinningTrades / rTotalTrades) * 100) : 0
-  const rDecisiveTrades = rWinningTrades + rLosingTrades
-  const rWinRateExclBe = rDecisiveTrades > 0 ? (rWinningTrades / rDecisiveTrades * 100).toFixed(2) : 0
-
-  // Calculate profit factor for R-value trades
-  const rGrossWins = overview.value.r_winning_trades > 0
-    ? Math.abs(parseFloat(overview.value.r_avg_win || 0) * overview.value.r_winning_trades)
-    : 0
-  const rGrossLosses = overview.value.r_losing_trades > 0
-    ? Math.abs(parseFloat(overview.value.r_avg_loss || 0) * overview.value.r_losing_trades)
-    : 0
-  const rProfitFactor = rGrossLosses > 0 ? (rGrossWins / rGrossLosses).toFixed(2) : rGrossWins > 0 ? 'Inf' : '0.00'
-
-  return {
-    ...overview.value,
-    total_trades: rTotalTrades,
-    winning_trades: rWinningTrades,
-    losing_trades: overview.value.r_losing_trades || 0,
-    breakeven_trades: overview.value.r_breakeven_trades || 0,
-    win_rate: rWinRate,
-    win_rate_excluding_breakeven: rWinRateExclBe,
-    total_pnl: parseFloat(overview.value.r_total_pnl || 0),
-    avg_pnl: parseFloat(overview.value.r_avg_pnl || 0),
-    avg_win: parseFloat(overview.value.r_avg_win || 0),
-    avg_loss: parseFloat(overview.value.r_avg_loss || 0),
-    profit_factor: rProfitFactor
-  }
-})
+// The summary cards always show the full filtered dataset in dollars. The
+// R-multiple toggle is charts-only and must not alter these headline metrics
+// (it previously swapped in an R-trade subset, still rendered in dollars, which
+// silently changed P&L / win rate / MAE with no R values shown). R headline
+// numbers live in the dedicated "Avg R-Multiple / Total R" flip card.
+const displayOverview = computed(() => overview.value)
 
 // Computed property for visible charts in order
 const visibleCharts = computed(() => {
@@ -1909,6 +1706,95 @@ function getBreakevenPercentage() {
   if (displayOverview.value.total_trades === 0) return 0
   return ((displayOverview.value.breakeven_trades / displayOverview.value.total_trades) * 100).toFixed(1)
 }
+
+// Whole-number thousands separator for counts/volume in the stats table
+function formatCount(value) {
+  return (Number(value) || 0).toLocaleString('en-US')
+}
+
+// Human-readable hold time from a minutes value (Tradervue-style)
+function formatHoldDuration(minutes) {
+  const m = Number(minutes) || 0
+  if (m <= 0) return '—'
+  if (m < 1) return 'less than a minute'
+  if (m < 60) {
+    const mins = Math.round(m)
+    return `${mins} minute${mins === 1 ? '' : 's'}`
+  }
+  if (m < 1440) {
+    const hours = m / 60
+    const h = hours >= 10 ? Math.round(hours) : Math.round(hours * 10) / 10
+    return `${h} hour${h === 1 ? '' : 's'}`
+  }
+  const days = m / 1440
+  const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10
+  return `${d} day${d === 1 ? '' : 's'}`
+}
+
+const POSITIVE_CLASS = 'text-green-600'
+const NEGATIVE_CLASS = 'text-red-600'
+const NEUTRAL_CLASS = 'text-gray-900 dark:text-white'
+
+function signClass(value) {
+  return (Number(value) || 0) >= 0 ? POSITIVE_CLASS : NEGATIVE_CLASS
+}
+
+// Free-tier stats shown to every user in the unified "Stats" table
+const freeStatRows = computed(() => {
+  const o = displayOverview.value || {}
+  const m = calculationMethod.value
+  const total = Number(o.total_trades) || 0
+  const winPct = total > 0 ? ((Number(o.winning_trades) / total) * 100).toFixed(1) : '0.0'
+  const lossPct = total > 0 ? ((Number(o.losing_trades) / total) * 100).toFixed(1) : '0.0'
+  return [
+    { label: 'Total Gain/Loss', display: formatCurrency(o.total_pnl ?? 0), class: signClass(o.total_pnl) },
+    { label: 'Largest Gain', display: formatCurrency(o.best_trade ?? 0), class: POSITIVE_CLASS },
+    { label: 'Largest Loss', display: formatCurrency(o.worst_trade ?? 0), class: NEGATIVE_CLASS },
+
+    { label: 'Average Daily Gain/Loss', display: formatCurrency(o.avg_daily_pnl ?? 0), class: signClass(o.avg_daily_pnl) },
+    { label: 'Average Daily Volume', display: formatCount(Math.round(o.avg_daily_volume ?? 0)) },
+    { label: `${m} Per-share Gain/Loss`, display: formatCurrency(o.avg_per_share_pnl ?? 0), class: signClass(o.avg_per_share_pnl) },
+
+    { label: `${m} Trade Gain/Loss`, display: formatCurrency(o.avg_pnl ?? 0), class: signClass(o.avg_pnl) },
+    { label: `${m} Winning Trade`, display: formatCurrency(o.avg_win ?? 0), class: POSITIVE_CLASS },
+    { label: `${m} Losing Trade`, display: formatCurrency(o.avg_loss ?? 0), class: NEGATIVE_CLASS },
+
+    { label: 'Total Number of Trades', display: formatCount(o.total_trades ?? 0) },
+    { label: 'Number of Winning Trades', display: `${formatCount(o.winning_trades ?? 0)} (${winPct}%)`, class: POSITIVE_CLASS },
+    { label: 'Number of Losing Trades', display: `${formatCount(o.losing_trades ?? 0)} (${lossPct}%)`, class: NEGATIVE_CLASS },
+
+    { label: 'Average Hold Time (scratch trades)', display: formatHoldDuration(o.avg_hold_scratch_minutes) },
+    { label: 'Average Hold Time (winning trades)', display: formatHoldDuration(o.avg_hold_win_minutes) },
+    { label: 'Average Hold Time (losing trades)', display: formatHoldDuration(o.avg_hold_loss_minutes) },
+
+    { label: 'Number of Scratch Trades', display: formatCount(o.breakeven_trades ?? 0) },
+    { label: 'Max Consecutive Wins', display: formatCount(o.max_consecutive_wins ?? 0), class: POSITIVE_CLASS },
+    { label: 'Max Consecutive Losses', display: formatCount(o.max_consecutive_losses ?? 0), class: NEGATIVE_CLASS },
+
+    { label: 'Profit Factor', display: o.profit_factor ?? '0.00' }
+  ]
+})
+
+// Advanced stats gated behind Pro (single overlay, matching existing behavior)
+const advancedStatRows = computed(() => {
+  const o = displayOverview.value || {}
+  const m = calculationMethod.value
+  const mae = (o.avg_mae === 'N/A' || o.avg_mae == null) ? 'N/A' : formatCurrency(o.avg_mae)
+  const mfe = (o.avg_mfe === 'N/A' || o.avg_mfe == null) ? 'N/A' : formatCurrency(o.avg_mfe)
+  return [
+    { label: 'Trade P&L Standard Deviation', display: formatCurrency(o.pnl_std_dev ?? 0), tip: 'Spread of individual trade results around the average. Lower means more consistent trades.' },
+    { label: 'System Quality Number (SQN)', display: o.sqn ?? '0.00', tip: `(${m} Trade / Standard Deviation) × √Number of Trades. Higher values indicate a more consistent system.` },
+    { label: 'Probability of Random Chance', display: o.probability_random ?? 'N/A', tip: 'Likelihood your results occurred by random chance. Lower is more statistically significant.' },
+
+    { label: 'Kelly Percentage', display: `${o.kelly_percentage ?? '0.00'}%`, tip: 'Optimal fraction of capital to risk per trade for long-term growth, from win rate and avg win/loss.' },
+    { label: 'K-Ratio', display: o.k_ratio ?? '0.00', tip: 'Consistency of the equity curve over time. Requires 3+ equity entries.' },
+    { label: 'Total Commissions', display: formatCurrency(o.total_commissions ?? 0), class: NEGATIVE_CLASS },
+
+    { label: 'Total Fees', display: formatCurrency(o.total_fees ?? 0), class: NEGATIVE_CLASS },
+    { label: `${m} Position MAE`, display: mae, class: mae === 'N/A' ? NEUTRAL_CLASS : NEGATIVE_CLASS, tip: 'Maximum Adverse Excursion — largest unrealized loss during the trade (estimated).' },
+    { label: `${m} Position MFE`, display: mfe, class: mfe === 'N/A' ? NEUTRAL_CLASS : POSITIVE_CLASS, tip: 'Maximum Favorable Excursion — largest unrealized profit during the trade (estimated).' }
+  ]
+})
 
 function getSQNInterpretation(sqn) {
   const sqnValue = parseFloat(sqn) || 0
@@ -2450,7 +2336,7 @@ function createDailyVolumeChart() {
 
   const ctx = dailyVolumeChart.value.getContext('2d')
   const labels = dailyVolumeData.value.map(d => {
-    const date = new Date(d.trade_date)
+    const date = parseTradeDate(d.trade_date)
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   })
   const volumes = dailyVolumeData.value.map(d => d.total_volume)
@@ -2541,7 +2427,7 @@ function createDrawdownChart() {
 
   const ctx = drawdownChart.value.getContext('2d')
   const labels = drawdownData.value.map(d => {
-    const date = new Date(d.trade_date)
+    const date = parseTradeDate(d.trade_date)
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   })
 
@@ -2796,11 +2682,10 @@ function buildFilterParams(additionalParams = {}) {
     params.accounts = selectedAccount.value
   }
 
-  // Add hasRValue filter when R-value mode is active
-  // This ensures the entire dataset is filtered to only trades with valid R-values (stop_loss set)
-  if (rValueMode.value) {
-    params.hasRValue = 'true'
-  }
+  // NOTE: R-value mode (rValueMode) is a CHARTS-ONLY display toggle. It must
+  // NOT filter the dataset — the summary cards (P&L, win rate, trades, MAE/MFE)
+  // always reflect the full filtered dataset in dollars. Only the charts switch
+  // to R-multiples. Do not inject a hasRValue filter here.
 
   // Remove null/undefined/empty string values to keep params clean
   Object.keys(params).forEach(key => {
@@ -2895,6 +2780,11 @@ async function fetchDrawdownData() {
 // TradeFilters only sends non-empty values, so we need to treat newFilters as the complete active filter set
 async function handleFilter(newFilters) {
   console.log('[AnalyticsView] handleFilter received:', newFilters)
+
+  // TradeFilters only emits non-empty values, so their count is the badge.
+  activeFilterCount.value = Object.values(newFilters || {}).filter(
+    v => v !== '' && v !== null && v !== undefined && v !== false && !(Array.isArray(v) && v.length === 0)
+  ).length
   
   // CRITICAL: TradeFilters only sends non-empty filters, so we must reset all filters first,
   // then apply only what's in newFilters. This ensures cleared filters are actually cleared.
@@ -2904,6 +2794,7 @@ async function handleFilter(newFilters) {
     startDate: '',
     endDate: '',
     strategies: '',
+    setups: '',
     sectors: '',
     tags: '',
     hasNews: '',
@@ -2937,6 +2828,7 @@ async function handleFilter(newFilters) {
     startDate: '',
     endDate: '',
     strategies: [],
+    setups: [],
     sectors: [],
     tags: [],
     hasNews: '',
@@ -3075,6 +2967,7 @@ async function resetFilters() {
     startDate: '',
     endDate: '',
     strategies: [],
+    setups: [],
     sectors: [],
     hasNews: '',
     side: '',
@@ -3105,6 +2998,7 @@ async function clearFilters() {
     startDate: '',
     endDate: '',
     strategies: [],
+    setups: [],
     sectors: [],
     hasNews: '',
     side: '',
@@ -3131,6 +3025,7 @@ async function clearFilters() {
     startDate: '',
     endDate: '',
     strategies: '',
+    setups: '',
     sectors: '',
     hasNews: '',
     // Advanced filters
@@ -3723,6 +3618,17 @@ onMounted(async () => {
       }
     }
 
+    // The Strategy/Setup Performance table lives on the "By Symbol & Strategy"
+    // tab and may be hidden via layout customization. Switch to that tab and
+    // force the section visible so the scroll target actually renders.
+    if (route.hash === '#strategies') {
+      activeAnalyticsTab.value = 'symbol'
+      const strategyTable = chartLayout.value.find(c => c.id === 'strategy-performance')
+      if (strategyTable && !strategyTable.visible) {
+        strategyTable.visible = true
+      }
+    }
+
     await nextTick()
     const element = document.querySelector(route.hash)
     if (element) {
@@ -3785,29 +3691,27 @@ function collapseSectors() {
   console.log(`[DISPLAY] Collapsed to show ${sectorsToShow.value} sectors`)
 }
 
-// Watch for R-value mode changes and refetch all data with hasRValue filter
+// Watch for R-value mode changes and rebuild charts (charts-only toggle)
 watch(() => rValueMode.value, async () => {
-  // Refetch all data with the new hasRValue filter applied
-  loading.value = true
-
-  await Promise.all([
-    fetchOverview(),
-    fetchPerformance(),
-    fetchSymbolStats(),
-    fetchTagStats(),
-    fetchStrategyStats(),
-    fetchHourOfDayStats(),
-    fetchChartData(),
-    fetchDrawdownData()
-  ])
-
-  loading.value = false
-  initialLoading.value = false
-
-  // Recreate charts after data is loaded
+  // R-multiple mode is a charts-only display toggle — the dataset is identical
+  // whether it's on or off, so there's no need to refetch. Just rebuild the
+  // charts so they redraw in R-multiples (or back to dollars). The summary
+  // cards intentionally do not change.
   await nextTick()
   setTimeout(() => {
     initializeAllCharts()
   }, 100)
 })
 </script>
+
+<style scoped>
+/* Crossfade between Average R-Multiple and Total R on the toggleable card */
+.r-fade-enter-active,
+.r-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.r-fade-enter-from,
+.r-fade-leave-to {
+  opacity: 0;
+}
+</style>

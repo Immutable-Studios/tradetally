@@ -48,10 +48,10 @@
 
                 <!-- Available tags -->
                 <div
-                    v-if="availableTags.length > 0"
+                    v-if="visibleTags.length > 0"
                     class="border-t border-gray-200 dark:border-gray-600"
                 >
-                    <div v-for="tag in availableTags" :key="tag.id" class="p-1">
+                    <div v-for="tag in visibleTags" :key="tag.id" class="p-1">
                         <label
                             class="flex items-center w-full px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer"
                         >
@@ -128,6 +128,7 @@
                         Manage Tags
                     </h3>
                     <button
+                        type="button"
                         @click="showTagManager = false"
                         class="text-gray-400 hover:text-gray-500"
                     >
@@ -165,6 +166,7 @@
                             title="Tag color"
                         />
                         <button
+                            type="button"
                             @click="createTag"
                             :disabled="!newTagName.trim() || creatingTag"
                             class="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -175,9 +177,12 @@
                 </div>
 
                 <!-- Existing tags list -->
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                    Use the arrows to change the order tags appear in dropdowns.
+                </p>
                 <div class="space-y-2 max-h-64 overflow-y-auto">
                     <div
-                        v-for="tag in availableTags"
+                        v-for="(tag, index) in orderedTags"
                         :key="tag.id"
                         class="flex items-center justify-between p-2 rounded border border-gray-200 dark:border-gray-600"
                     >
@@ -198,11 +203,57 @@
                                 />
                             </label>
                             <span
-                                class="text-sm text-gray-900 dark:text-white truncate"
+                                class="text-sm truncate"
+                                :class="tag.hidden ? 'text-gray-400 dark:text-gray-500 line-through' : 'text-gray-900 dark:text-white'"
                                 >{{ tag.name }}</span
                             >
+                            <span
+                                v-if="typeof tag.count === 'number'"
+                                class="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0"
+                                >{{ tag.count }} {{ tag.count === 1 ? 'trade' : 'trades' }}</span
+                            >
+                        </div>
+                        <div class="flex flex-col flex-shrink-0 ml-1">
+                            <button
+                                type="button"
+                                class="p-0.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-30"
+                                :disabled="index === 0"
+                                title="Move up"
+                                @click="moveTag(tag.name, 'up')"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </button>
+                            <button
+                                type="button"
+                                class="p-0.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-30"
+                                :disabled="index === orderedTags.length - 1"
+                                title="Move down"
+                                @click="moveTag(tag.name, 'down')"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
                         </div>
                         <button
+                            type="button"
+                            @click="toggleTagHidden(tag)"
+                            class="ml-2 flex-shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                            :class="tag.hidden ? 'text-gray-400 dark:text-gray-500' : 'text-primary-600 dark:text-primary-400'"
+                            :title="tag.hidden ? 'Show in dropdowns' : 'Hide from dropdowns'"
+                        >
+                            <svg v-if="!tag.hidden" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
                             @click="deleteTag(tag.id)"
                             class="text-red-600 hover:text-red-700 text-sm ml-2 flex-shrink-0"
                             title="Delete tag"
@@ -236,9 +287,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import api from "@/services/api";
 import { useNotification } from "@/composables/useNotification";
+import { useTagOrder } from "@/composables/useTagOrder";
 
 const props = defineProps({
     modelValue: {
@@ -246,6 +298,28 @@ const props = defineProps({
         default: () => [],
     },
 });
+
+// User-defined tag order, shared with the trade form and synced across devices.
+const {
+    orderUsageItems: orderTagItems,
+    moveTagInUsage,
+    refresh: refreshTagOrder,
+} = useTagOrder();
+
+// All tags in the user's chosen order (custom order first, then most-used).
+const orderedTags = computed(() => orderTagItems(availableTags.value));
+
+// Tags to show in the selection dropdown: drop hidden ones, but keep any that
+// are currently selected so an active filter is never silently lost.
+const visibleTags = computed(() =>
+    orderedTags.value.filter(
+        (tag) => !tag.hidden || (props.modelValue || []).includes(tag.name),
+    ),
+);
+
+function moveTag(name, direction) {
+    moveTagInUsage(availableTags.value, name, direction);
+}
 
 const emit = defineEmits(["update:modelValue"]);
 const { showDangerConfirmation } = useNotification();
@@ -267,6 +341,7 @@ const handleClickOutside = (event) => {
 
 onMounted(() => {
     document.addEventListener("click", handleClickOutside);
+    refreshTagOrder();
     fetchTags();
 });
 
@@ -321,6 +396,18 @@ async function updateTagColor(tag, newColor) {
         console.error("[ERROR] Failed to update tag color:", error);
         tag.color = previousColor;
         alert(error.response?.data?.message || "Failed to update tag color");
+    }
+}
+
+async function toggleTagHidden(tag) {
+    const next = !tag.hidden;
+    tag.hidden = next; // optimistic
+    try {
+        await api.put(`/tags/${tag.id}`, { hidden: next });
+    } catch (error) {
+        console.error("[ERROR] Failed to update tag visibility:", error);
+        tag.hidden = !next; // revert
+        alert(error.response?.data?.message || "Failed to update tag");
     }
 }
 

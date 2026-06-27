@@ -8,6 +8,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env.loc
 const { validateEnv } = require('./config/env');
 
 const { migrate } = require('./utils/migrate');
+const { ensurePostExitSchema } = require('./utils/ensurePostExitSchema');
 const { initializePostHogTelemetry, shutdown: shutdownPostHogTelemetry } = require('./posthog-telemetry');
 const { securityMiddleware } = require('./middleware/security');
 const logger = require('./utils/logger');
@@ -22,6 +23,7 @@ const apiKeyRoutes = require('./routes/apiKey.routes');
 const apiRoutes = require('./routes/api.routes');
 const v1Routes = require('./routes/v1');
 const wellKnownRoutes = require('./routes/well-known.routes');
+const ogRoutes = require('./routes/og.routes');
 const adminRoutes = require('./routes/admin.routes');
 const featuresRoutes = require('./routes/features.routes');
 const behavioralAnalyticsRoutes = require('./routes/behavioralAnalytics.routes');
@@ -47,6 +49,7 @@ const yearWrappedRoutes = require('./routes/yearWrapped.routes');
 const investmentsRoutes = require('./routes/investments.routes');
 const stockScannerRoutes = require('./routes/stockScanner.routes');
 const accountRoutes = require('./routes/account.routes');
+const plaidWebhookRoutes = require('./routes/plaidWebhook.routes');
 const instrumentTemplatesRoutes = require('./routes/instrumentTemplates.routes');
 const tradeManagementRoutes = require('./routes/tradeManagement.routes');
 const playbookRoutes = require('./routes/playbook.routes');
@@ -58,6 +61,8 @@ const passkeyRoutes = require('./routes/passkey.routes');
 const testimonialsRoutes = require('./routes/testimonials.routes');
 const supportRoutes = require('./routes/support.routes');
 const internalRoutes = require('./routes/internal.routes');
+const edgeReportRoutes = require('./routes/edgeReport.routes');
+const propFirmRoutes = require('./routes/propFirm.routes');
 const BillingService = require('./services/billingService');
 const priceMonitoringService = require('./services/priceMonitoringService');
 const backupScheduler = require('./services/backupScheduler.service');
@@ -77,6 +82,7 @@ const portfolioSnapshotScheduler = require('./services/portfolioSnapshotSchedule
 const webMentionScheduler = require('./services/webMentionScheduler');
 const webhookEventBridge = require('./services/webhookEventBridge');
 const crmSyncScheduler = require('./services/crmSyncScheduler');
+const edgeReportScheduler = require('./services/edgeReportScheduler');
 const activityTrackingService = require('./services/activityTrackingService');
 const engagementScheduler = require('./services/engagementScheduler');
 const activityTrackingMiddleware = require('./middleware/activityTracking');
@@ -223,7 +229,7 @@ app.use(ensureCsrfCookie);
 
 // Body parsing middleware (skip for webhook routes that need raw body)
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/billing/webhooks/stripe') {
+  if (req.originalUrl === '/api/billing/webhooks/stripe' || req.originalUrl.split('?')[0] === '/api/plaid/webhook') {
     next();
   } else {
     express.json()(req, res, next);
@@ -278,6 +284,7 @@ app.use('/api/year-wrapped', yearWrappedRoutes);
 app.use('/api/investments', investmentsRoutes);
 app.use('/api/scanner', stockScannerRoutes);
 app.use('/api/accounts', accountRoutes);
+app.use('/api/plaid/webhook', plaidWebhookRoutes);
 app.use('/api/instrument-templates', instrumentTemplatesRoutes);
 app.use('/api/trade-management', tradeManagementRoutes);
 app.use('/api/playbooks', playbookRoutes);
@@ -287,6 +294,8 @@ app.use('/api/unsubscribe', unsubscribeRoutes);
 app.use('/api/trial-feedback', trialFeedbackRoutes);
 app.use('/api/auth/passkey', passkeyRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
+app.use('/api/edge-reports', edgeReportRoutes);
+app.use('/api/prop-firm', propFirmRoutes);
 
 // OAuth2 Provider endpoints
 app.use('/oauth', oauth2Routes);
@@ -294,6 +303,9 @@ app.use('/api/oauth', oauth2Routes);
 
 // Well-known endpoints for mobile discovery
 app.use('/.well-known', wellKnownRoutes);
+
+// Open Graph endpoints for crawler link previews (nginx routes bot UAs here).
+app.use('/og', ogRoutes);
 
 // Swagger API Documentation
 if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'true') {
@@ -452,6 +464,16 @@ async function runPnlBackfillIfNeeded() {
   }
 }
 
+async function runDollarStopLossRepairIfNeeded() {
+  if (process.env.SKIP_DOLLAR_STOP_REPAIR === 'true') {
+    console.log('[STOP LOSS] Skipping dollar stop-loss repair (SKIP_DOLLAR_STOP_REPAIR=true).');
+    return;
+  }
+
+  const Trade = require('./models/Trade');
+  await Trade.syncDollarDefaultStopLossesForAffectedUsers();
+}
+
 async function startTradeEnrichmentWorker() {
   console.log('Starting background worker for trade enrichment...');
   let attempts = 0;
@@ -492,6 +514,7 @@ function scheduleBackgroundServices(backgroundJobsDisabled) {
   };
 
   defer('pnl-backfill', runPnlBackfillIfNeeded);
+  defer('dollar-stop-loss-repair', runDollarStopLossRepairIfNeeded);
 
   if (backgroundJobsDisabled) {
     console.log('CUSIP queue processing disabled (DISABLE_BACKGROUND_JOBS=true)');
@@ -658,6 +681,18 @@ function scheduleBackgroundServices(backgroundJobsDisabled) {
   }
 
   if (backgroundJobsDisabled) {
+    console.log('Edge report scheduler disabled (DISABLE_BACKGROUND_JOBS=true)');
+  } else if (process.env.ENABLE_EDGE_REPORTS !== 'false') {
+    defer('edge-report-scheduler', () => {
+      console.log('Starting edge report scheduler...');
+      edgeReportScheduler.start();
+      console.log('[SUCCESS] Edge report scheduler started');
+    });
+  } else {
+    console.log('Edge report scheduler disabled (ENABLE_EDGE_REPORTS=false)');
+  }
+
+  if (backgroundJobsDisabled) {
     console.log('CRM sync disabled (DISABLE_BACKGROUND_JOBS=true)');
   } else if (process.env.ENABLE_CRM_SYNC === 'true') {
     defer('crm-sync-scheduler', () => {
@@ -798,6 +833,16 @@ async function startServer() {
       logger.info('Skipping migrations (RUN_MIGRATIONS=false)');
     }
 
+    const schemaRepair = await ensurePostExitSchema();
+    if (schemaRepair.repairedTradeColumns.length > 0 || schemaRepair.repairedUserSettingsColumns.length > 0) {
+      logger.warn(
+        `Repaired missing post-exit schema columns. trades: ${
+          schemaRepair.repairedTradeColumns.join(', ') || 'none'
+        }; user_settings: ${schemaRepair.repairedUserSettingsColumns.join(', ') || 'none'}`,
+        'startup'
+      );
+    }
+
     // Initialize billing service (conditional)
     await BillingService.initialize();
 
@@ -826,6 +871,7 @@ process.on('SIGTERM', async () => {
   symbolCategoryScheduler.stop();
   portfolioSnapshotScheduler.stop();
   webMentionScheduler.stop();
+  edgeReportScheduler.stop();
   if (typeof GamificationScheduler.stopScheduler === 'function') GamificationScheduler.stopScheduler();
   if (typeof TrialScheduler.stopScheduler === 'function') TrialScheduler.stopScheduler();
   if (RetentionEmailScheduler.stopScheduler) RetentionEmailScheduler.stopScheduler();
@@ -851,6 +897,7 @@ process.on('SIGINT', async () => {
   symbolCategoryScheduler.stop();
   portfolioSnapshotScheduler.stop();
   webMentionScheduler.stop();
+  edgeReportScheduler.stop();
   if (typeof GamificationScheduler.stopScheduler === 'function') GamificationScheduler.stopScheduler();
   if (typeof TrialScheduler.stopScheduler === 'function') TrialScheduler.stopScheduler();
   if (RetentionEmailScheduler.stopScheduler) RetentionEmailScheduler.stopScheduler();

@@ -128,14 +128,17 @@ function isOpeningFill(action, tradeSide) {
   return isSellAction(action);
 }
 
-function computePnlPercent(entryPrice, exitPrice, side, pnl, quantity, instrumentType, pointValue) {
+function computePnlPercent(entryPrice, exitPrice, side, pnl, quantity, instrumentType, pointValue, contractSize) {
   if (exitPrice == null || entryPrice == null || entryPrice <= 0) return null;
-  if (instrumentType === 'future' && pnl != null && quantity != null) {
-    const pv = parseNumeric(pointValue) || 1;
-    const notional = entryPrice * quantity * pv;
-    if (notional <= 0) return null;
-    return (pnl / notional) * 100;
+
+  const parsedPnl = parseNumeric(pnl);
+  const parsedQuantity = parseNumeric(quantity);
+  if (parsedPnl != null && parsedQuantity != null && parsedQuantity > 0) {
+    const multiplier = multiplierFor(instrumentType, contractSize, pointValue);
+    const notional = entryPrice * parsedQuantity * multiplier;
+    if (notional > 0) return (parsedPnl / notional) * 100;
   }
+
   if (side === 'long') {
     return ((exitPrice - entryPrice) / entryPrice) * 100;
   }
@@ -145,13 +148,15 @@ function computePnlPercent(entryPrice, exitPrice, side, pnl, quantity, instrumen
 function resolvePerExecCosts(executions, fallbackCommission, fallbackFees) {
   const totalQty = executions.reduce((sum, e) => sum + Math.abs(parseNumeric(e?.quantity) || 0), 0);
 
-  // If ANY execution carries ANY cost field (commission or fees), treat per-exec
-  // as authoritative and do NOT also apply trade-level fallbacks. Some importers
-  // (notably IBKR) record the broker commission in both `trade.commission` AND
-  // `execution.fees` — applying both would double-count.
-  // Only prorate trade-level totals when executions carry no cost info at all.
+  // If ANY execution carries a non-zero cost, treat per-exec values as authoritative
+  // and do NOT also apply trade-level fallbacks. Some importers (notably IBKR) record
+  // the broker commission in both `trade.commission` AND `execution.fees` — applying
+  // both would double-count.
+  // Importers that provide no cost data (e.g. Tradovate) store commission: 0 / fees: 0
+  // explicitly. Treat explicit zeros the same as absent — fall back to the trade-level
+  // totals (user's custom broker fee settings) in that case.
   const hasAnyExecCost = executions.some((e) =>
-    parseNumeric(e?.commission) !== null || parseNumeric(e?.fees) !== null
+    (parseNumeric(e?.commission) ?? 0) !== 0 || (parseNumeric(e?.fees) ?? 0) !== 0
   );
 
   return executions.map((execution) => {
@@ -256,7 +261,7 @@ function processGrouped(input, executions, timezone) {
   const exitPriceAvg = isFullyClosed && totalExitQty > 0 ? totalExitNotional / totalExitQty : null;
   const pnl = anyClosed ? totalRealizedPnl : null;
   const pnlPercent = pnl != null && entryPriceAvg != null
-    ? computePnlPercent(entryPriceAvg, exitPriceAvg ?? (totalExitQty > 0 ? totalExitNotional / totalExitQty : null), side, pnl, totalEntryQty || totalExitQty, instrumentType, pointValue)
+    ? computePnlPercent(entryPriceAvg, exitPriceAvg ?? (totalExitQty > 0 ? totalExitNotional / totalExitQty : null), side, pnl, totalEntryQty || totalExitQty, instrumentType, pointValue, contractSize)
     : null;
   const tradeDate = earliestEntryTs ? dateInTimezone(earliestEntryTs, timezone) : null;
 
@@ -433,7 +438,7 @@ function processFillBased(input, executions, timezone, tradeId) {
   const exitPriceAvg = isFullyClosed && totalExitQty > 0 ? totalExitNotional / totalExitQty : null;
   const pnl = anyClosed ? totalRealizedPnl : null;
   const pnlPercent = pnl != null && entryPriceAvg != null
-    ? computePnlPercent(entryPriceAvg, exitPriceAvg ?? (totalExitQty > 0 ? totalExitNotional / totalExitQty : null), side, pnl, totalEntryQty || totalExitQty, instrumentType, pointValue)
+    ? computePnlPercent(entryPriceAvg, exitPriceAvg ?? (totalExitQty > 0 ? totalExitNotional / totalExitQty : null), side, pnl, totalEntryQty || totalExitQty, instrumentType, pointValue, contractSize)
     : null;
   const tradeDate = earliestEntryTs ? dateInTimezone(earliestEntryTs, timezone) : null;
 

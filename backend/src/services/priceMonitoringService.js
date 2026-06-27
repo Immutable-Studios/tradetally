@@ -7,7 +7,6 @@ const { uuidv4 } = require('../utils/uuid');
 const TierService = require('./tierService');
 const NotificationPreferenceService = require('./notificationPreferenceService');
 const pushNotificationService = require('./pushNotificationService');
-const emailDeliveryService = require('./emailDeliveryService');
 const EmailService = require('./emailService');
 const { publish } = require('../events/domainEvents');
 const escapeHtml = require('../utils/escapeHtml');
@@ -44,7 +43,7 @@ class PriceMonitoringService {
   }
 
   isEmailConfigured() {
-    return emailDeliveryService.isConfigured();
+    return EmailService.isConfigured();
   }
 
   async start() {
@@ -138,6 +137,7 @@ class PriceMonitoringService {
       // Track API failures to detect widespread outages
       let consecutiveFailures = 0;
       let successCount = 0;
+      let capacitySkipCount = 0;
 
       // Update prices for all symbols
       for (const symbol of symbols) {
@@ -150,11 +150,14 @@ class PriceMonitoringService {
           continue;
         }
 
-        const success = await this.updateSymbolPrice(symbol);
+        const updateResult = await this.updateSymbolPrice(symbol);
         
-        if (success) {
+        if (updateResult === true) {
           successCount++;
           consecutiveFailures = 0; // Reset failure counter on success
+        } else if (updateResult === 'skipped') {
+          capacitySkipCount++;
+          consecutiveFailures = 0;
         } else {
           consecutiveFailures++;
           
@@ -169,10 +172,11 @@ class PriceMonitoringService {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      logger.debug(`Price monitoring cycle complete: ${successCount}/${symbols.length} symbols updated successfully`);
+      logger.debug(`Price monitoring cycle complete: ${successCount}/${symbols.length} symbols updated successfully, ${capacitySkipCount} skipped for provider capacity`);
 
-      // Only check for triggered alerts if we had some successful price updates
-      if (successCount > 0) {
+      // Check alerts when prices were updated, or when this cycle intentionally
+      // skipped saturated provider calls and cached prices may still be usable.
+      if (successCount > 0 || capacitySkipCount > 0) {
         await this.checkAlerts();
       }
 
@@ -206,11 +210,22 @@ class PriceMonitoringService {
       } else {
         ({ data: priceData, source: dataSource, error } = await priceFallbackManager.getQuoteWithFallback(
           symbol,
-          (sym) => finnhub.getQuote(sym)
+          (sym) => finnhub.getQuote(sym, {
+            source: 'price_monitoring',
+            priority: 6,
+            background: true,
+            maxQueueWaitMs: 0
+          }),
+          finnhub.providerName || 'finnhub'
         ));
       }
 
       if (!priceData) {
+        if (this.isProviderCapacityError(error)) {
+          logger.debug(`[MARKET-DATA-SCHEDULER] Price monitoring skipped ${symbol}: ${error.message}`);
+          return 'skipped';
+        }
+
         // Both sources failed - track failure
         const failureData = this.failedSymbols.get(symbol) || { count: 0, firstSeen: Date.now() };
         failureData.count++;
@@ -291,6 +306,10 @@ class PriceMonitoringService {
       logger.error(`Error updating price for ${symbol}:`, error);
       return false;
     }
+  }
+
+  isProviderCapacityError(error) {
+    return error?.code === 'FINNHUB_SCHEDULER_SKIPPED' || error?.code === 'FINNHUB_SCHEDULER_TIMEOUT';
   }
 
   async checkAlerts() {
@@ -505,7 +524,7 @@ class PriceMonitoringService {
         <p><em>This alert was sent from your TradeTally Pro account.</em></p>
       `;
 
-      await emailDeliveryService.sendMail({
+      await EmailService.createTransporter().sendMail({
         from: EmailService.getTransactionalFromAddress(),
         to: email,
         subject: subject,

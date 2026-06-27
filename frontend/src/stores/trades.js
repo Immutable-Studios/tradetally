@@ -187,6 +187,22 @@ export const useTradesStore = defineStore('trades', () => {
       ...params
     }
 
+    // The shared filter state stores multi-select filters as arrays (set by
+    // the dashboard sync, issue #350). The backend expects comma-separated
+    // strings — axios would otherwise serialize arrays as repeated tags[]=
+    // params, which the API coerces to '' and either drops the filter or
+    // matches nothing. Empty arrays are dropped entirely.
+    for (const [key, value] of Object.entries(merged)) {
+      if (key === 'accounts') continue // normalizeAccountsFilter handles arrays itself
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          delete merged[key]
+        } else {
+          merged[key] = value.join(',')
+        }
+      }
+    }
+
     const normalizedAccounts = normalizeAccountsFilter(merged.accounts)
     if (normalizedAccounts) {
       merged.accounts = normalizedAccounts
@@ -438,12 +454,12 @@ export const useTradesStore = defineStore('trades', () => {
     }
   }
 
-  async function importTrades(file, broker, mappingId = null, accountId = null) {
+  async function importTrades(file, broker, mappingId = null, accountId = null, strategy = null) {
     loading.value = true
     error.value = null
 
     try {
-      console.log('Creating FormData with file:', file.name, 'broker:', broker, 'mappingId:', mappingId, 'accountId:', accountId)
+      console.log('Creating FormData with file:', file.name, 'broker:', broker, 'mappingId:', mappingId, 'accountId:', accountId, 'strategy:', strategy)
       const formData = new FormData()
       formData.append('file', file)
       formData.append('broker', broker)
@@ -452,6 +468,9 @@ export const useTradesStore = defineStore('trades', () => {
       }
       if (accountId) {
         formData.append('accountId', accountId)
+      }
+      if (strategy && String(strategy).trim()) {
+        formData.append('strategy', String(strategy).trim())
       }
 
       console.log('FormData contents:')

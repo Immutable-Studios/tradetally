@@ -150,10 +150,13 @@
                     class="text-sm font-medium text-gray-700 dark:text-gray-300"
                     >Status:</label
                 >
-                <select v-model="filters.activeOnly" class="input">
-                    <option value="true">Active Only</option>
-                    <option value="false">All Alerts</option>
-                </select>
+                <BaseSelect
+                    v-model="filters.activeOnly"
+                    :options="[
+                        { value: 'true', label: 'Active Only' },
+                        { value: 'false', label: 'All Alerts' },
+                    ]"
+                />
             </div>
             <button @click="loadAlerts" class="btn-secondary">Refresh</button>
         </div>
@@ -292,12 +295,13 @@
                                 class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400"
                             >
                                 <div class="flex space-x-1">
-                                    <span
+                                    <MdiIcon
                                         v-if="alert.email_enabled"
                                         title="Email enabled"
+                                        :icon="mdiEmailOutline"
+                                        :size="16"
                                         class="text-primary-500"
-                                        >✉</span
-                                    >
+                                        />
                                     <MdiIcon
                                         v-if="alert.browser_enabled"
                                         :icon="mdiBell"
@@ -422,18 +426,14 @@
                                     class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                                     >Alert Type</label
                                 >
-                                <select
-                                    id="alertType"
+                                <BaseSelect
                                     v-model="alertForm.alert_type"
-                                    required
-                                    class="input"
-                                >
-                                    <option value="above">Price Above</option>
-                                    <option value="below">Price Below</option>
-                                    <option value="change_percent">
-                                        % Change
-                                    </option>
-                                </select>
+                                    :options="[
+                                        { value: 'above', label: 'Price Above' },
+                                        { value: 'below', label: 'Price Below' },
+                                        { value: 'change_percent', label: '% Change' },
+                                    ]"
+                                />
                             </div>
                         </div>
 
@@ -561,9 +561,10 @@ import api from "@/services/api";
 import ProUpgradePrompt from "@/components/ProUpgradePrompt.vue";
 import MdiIcon from "@/components/MdiIcon.vue";
 import PriceAlertWebhookManager from "@/components/price-alerts/PriceAlertWebhookManager.vue";
-import { mdiBell, mdiRepeat } from "@mdi/js";
+import { mdiBell, mdiRepeat, mdiEmailOutline } from "@mdi/js";
 import { getMarketStatus } from "@/utils/marketStatus";
 import SymbolAutocomplete from "@/components/common/SymbolAutocomplete.vue";
+import BaseSelect from "@/components/common/BaseSelect.vue";
 import { useCurrencyFormatter } from "@/composables/useCurrencyFormatter";
 
 export default {
@@ -573,6 +574,7 @@ export default {
         MdiIcon,
         PriceAlertWebhookManager,
         SymbolAutocomplete,
+        BaseSelect,
     },
     setup() {
         const route = useRoute();

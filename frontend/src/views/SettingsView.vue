@@ -9,7 +9,7 @@
 
         <!-- Tabs Navigation -->
         <div class="border-b border-gray-200 dark:border-gray-700 mb-8">
-            <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+            <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Tabs">
                 <button
                     v-for="tab in tabs"
                     :key="tab.id"
@@ -47,43 +47,146 @@
 
                         <form
                             @submit.prevent="updateAnalyticsSettings"
-                            class="space-y-6"
+                            class="divide-y divide-gray-100 dark:divide-gray-700"
                         >
-                            <div>
+                            <div class="pb-6">
                                 <label for="statisticsCalculation" class="label"
                                     >Statistics Calculation Method</label
                                 >
-                                <select
-                                    id="statisticsCalculation"
-                                    v-model="
-                                        analyticsForm.statisticsCalculation
-                                    "
-                                    class="input"
-                                >
-                                    <option value="average">
-                                        Average (Mean)
-                                    </option>
-                                    <option value="median">Median</option>
-                                </select>
+                                <BaseSelect
+                                    v-model="analyticsForm.statisticsCalculation"
+                                    :options="[
+                                        { value: 'average', label: 'Average (Mean)' },
+                                        { value: 'median', label: 'Median' }
+                                    ]"
+                                />
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Choose whether to use averages or medians
                                     for calculations like Average P&L, Average
                                     Win, Average Loss, etc. Medians are less
                                     affected by outliers and may provide a more
                                     representative view of typical performance.
-                                    <span
-                                        class="block mt-2 text-primary-600 dark:text-primary-400 font-medium"
-                                    >
-                                        Note: Changes take effect immediately
-                                        and will update labels throughout the
-                                        application.
-                                    </span>
+                                </p>
+                                <p class="mt-1 text-sm text-primary-600 dark:text-primary-400 font-medium">
+                                    Note: Changes take effect immediately
+                                    and will update labels throughout the
+                                    application.
                                 </p>
                             </div>
 
-                            <div>
+                            <div class="py-6">
+                                <div
+                                    class="flex items-start justify-between gap-6 p-4 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700"
+                                >
+                                    <div class="flex-1 min-w-0">
+                                        <label
+                                            for="analyticsPositionGrouping"
+                                            class="block text-sm font-semibold text-gray-900 dark:text-white"
+                                        >
+                                            Win Rate by Whole Trade
+                                        </label>
+                                        <p
+                                            class="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed"
+                                        >
+                                            Group multi-leg option positions (spreads,
+                                            iron condors, straddles, etc.) into a
+                                            single trade for win rate and trade counts.
+                                            Legs are grouped when they share the same
+                                            account, underlying, expiration, and trade
+                                            date, with fills within 5 minutes of each
+                                            other. Common strategies are auto-detected
+                                            and shown as a badge in the trade list.
+                                            Affects all analytics; total P&amp;L is
+                                            unchanged.
+                                        </p>
+                                    </div>
+                                    <div class="flex-shrink-0 pt-0.5">
+                                        <button
+                                            type="button"
+                                            @click="
+                                                analyticsForm.analyticsPositionGrouping =
+                                                    !analyticsForm.analyticsPositionGrouping
+                                            "
+                                            :class="[
+                                                analyticsForm.analyticsPositionGrouping
+                                                    ? 'bg-primary-600'
+                                                    : 'bg-gray-200 dark:bg-gray-700',
+                                                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2',
+                                            ]"
+                                            role="switch"
+                                            :aria-checked="
+                                                analyticsForm.analyticsPositionGrouping
+                                            "
+                                        >
+                                            <span
+                                                :class="[
+                                                    analyticsForm.analyticsPositionGrouping
+                                                        ? 'translate-x-5'
+                                                        : 'translate-x-0',
+                                                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                                                ]"
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="py-6">
+                                <div
+                                    class="flex items-start justify-between gap-6 p-4 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700"
+                                >
+                                    <div class="flex-1 min-w-0">
+                                        <label
+                                            for="edgeReportEnabled"
+                                            class="block text-sm font-semibold text-gray-900 dark:text-white"
+                                        >
+                                            Weekly Edge Report
+                                        </label>
+                                        <p
+                                            class="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed"
+                                        >
+                                            Get a weekly coaching digest every Monday:
+                                            your numbers vs last week, your best edge,
+                                            your biggest leak, and one concrete action
+                                            item. The narrative is written by your
+                                            configured AI provider when available and
+                                            delivered by email.
+                                        </p>
+                                    </div>
+                                    <div class="flex-shrink-0 pt-0.5">
+                                        <button
+                                            type="button"
+                                            @click="
+                                                analyticsForm.edgeReportEnabled =
+                                                    !analyticsForm.edgeReportEnabled
+                                            "
+                                            :class="[
+                                                analyticsForm.edgeReportEnabled
+                                                    ? 'bg-primary-600'
+                                                    : 'bg-gray-200 dark:bg-gray-700',
+                                                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2',
+                                            ]"
+                                            role="switch"
+                                            :aria-checked="
+                                                analyticsForm.edgeReportEnabled
+                                            "
+                                        >
+                                            <span
+                                                :class="[
+                                                    analyticsForm.edgeReportEnabled
+                                                        ? 'translate-x-5'
+                                                        : 'translate-x-0',
+                                                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                                                ]"
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="py-6">
                                 <label for="breakevenToleranceTicks" class="label"
                                     >Default Breakeven Tolerance (ticks)</label
                                 >
@@ -98,7 +201,7 @@
                                     class="input"
                                 />
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Trades whose gross P&L (price only, ignoring
                                     commissions and fees) land within this many
@@ -111,15 +214,13 @@
                                 </p>
 
                                 <!-- Per-instrument overrides -->
-                                <div class="mt-4">
-                                    <span class="label"
-                                        >Per-Instrument Overrides</span
-                                    >
+                                <div class="mt-5 p-4 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700">
+                                    <p class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Per-Instrument Overrides</p>
                                     <p
-                                        class="mt-1 mb-2 text-sm text-gray-500 dark:text-gray-400"
+                                        class="text-sm text-gray-500 dark:text-gray-400 mb-3"
                                     >
                                         Set a different tolerance for specific
-                                        instruments by their underlying symbol -
+                                        instruments by their underlying symbol —
                                         e.g. 2 ticks on ES but 5 on NQ. Instruments
                                         not listed use the default above.
                                     </p>
@@ -154,7 +255,7 @@
                                     </div>
                                     <button
                                         type="button"
-                                        class="btn-secondary mt-2"
+                                        class="btn-secondary mt-3"
                                         @click="addBreakevenToleranceRow"
                                     >
                                         Add Instrument
@@ -162,27 +263,16 @@
                                 </div>
                             </div>
 
-                            <div>
+                            <div class="py-6">
                                 <label for="displayCurrency" class="label"
                                     >Display Currency</label
                                 >
-                                <select
-                                    id="displayCurrency"
-                                    v-model="
-                                        analyticsForm.displayCurrency
-                                    "
-                                    class="input"
-                                >
-                                    <option
-                                        v-for="c in currencyOptions"
-                                        :key="c.code"
-                                        :value="c.code"
-                                    >
-                                        {{ c.code }} - {{ c.name }}
-                                    </option>
-                                </select>
+                                <BaseSelect
+                                    v-model="analyticsForm.displayCurrency"
+                                    :options="currencySelectOptions"
+                                />
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Changes the currency symbol displayed for
                                     P&L, prices, and commissions. This is a
@@ -193,88 +283,74 @@
                                 </p>
                             </div>
 
-                            <div
-                                class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800 rounded-lg"
-                            >
-                                <div class="flex-1">
-                                    <label
-                                        for="autoCloseExpiredOptions"
-                                        class="block text-sm font-medium text-gray-900 dark:text-white"
-                                    >
-                                        Auto-Close Expired Options
-                                    </label>
-                                    <p
-                                        class="mt-1 text-sm text-gray-600 dark:text-gray-400"
-                                    >
-                                        Automatically close expired options
-                                        positions with appropriate P&L (Long:
-                                        -100%, Short: +100%). The system checks
-                                        hourly for expired options.
-                                    </p>
-                                </div>
-                                <div class="ml-4 flex-shrink-0">
-                                    <button
-                                        type="button"
-                                        @click="
-                                            analyticsForm.autoCloseExpiredOptions =
-                                                !analyticsForm.autoCloseExpiredOptions
-                                        "
-                                        :class="[
-                                            analyticsForm.autoCloseExpiredOptions
-                                                ? 'bg-primary-600'
-                                                : 'bg-gray-200 dark:bg-gray-700',
-                                            'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2',
-                                        ]"
-                                        role="switch"
-                                        :aria-checked="
-                                            analyticsForm.autoCloseExpiredOptions
-                                        "
-                                    >
-                                        <span
+                            <div class="py-6">
+                                <div
+                                    class="flex items-start justify-between gap-6 p-4 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700"
+                                >
+                                    <div class="flex-1 min-w-0">
+                                        <label
+                                            for="autoCloseExpiredOptions"
+                                            class="block text-sm font-semibold text-gray-900 dark:text-white"
+                                        >
+                                            Auto-Close Expired Options
+                                        </label>
+                                        <p
+                                            class="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed"
+                                        >
+                                            Automatically close expired options
+                                            positions with appropriate P&L (Long:
+                                            -100%, Short: +100%). The system checks
+                                            hourly for expired options.
+                                        </p>
+                                    </div>
+                                    <div class="flex-shrink-0 pt-0.5">
+                                        <button
+                                            type="button"
+                                            @click="
+                                                analyticsForm.autoCloseExpiredOptions =
+                                                    !analyticsForm.autoCloseExpiredOptions
+                                            "
                                             :class="[
                                                 analyticsForm.autoCloseExpiredOptions
-                                                    ? 'translate-x-5'
-                                                    : 'translate-x-0',
-                                                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                                                    ? 'bg-primary-600'
+                                                    : 'bg-gray-200 dark:bg-gray-700',
+                                                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2',
                                             ]"
-                                        />
-                                    </button>
+                                            role="switch"
+                                            :aria-checked="
+                                                analyticsForm.autoCloseExpiredOptions
+                                            "
+                                        >
+                                            <span
+                                                :class="[
+                                                    analyticsForm.autoCloseExpiredOptions
+                                                        ? 'translate-x-5'
+                                                        : 'translate-x-0',
+                                                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                                                ]"
+                                            />
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div>
+                            <div class="py-6">
                                 <label for="defaultStopLossType" class="label"
                                     >Default Stop Loss Type</label
                                 >
-                                <select
-                                    id="defaultStopLossType"
+                                <BaseSelect
                                     v-model="analyticsForm.defaultStopLossType"
-                                    class="input"
-                                >
-                                    <option value="percent">Percentage</option>
-                                    <option value="dollar">
-                                        Dollar amount
-                                    </option>
-                                    <option value="lod">
-                                        Low of Day (LoD)
-                                    </option>
-                                </select>
-                                <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
-                                >
-                                    <strong>Percentage:</strong> Use a fixed
-                                    percentage below/above entry price.
-                                    <br />
-                                    <strong>Dollar amount:</strong> Use a fixed
-                                    risk per trade in dollars (e.g., $100 or
-                                    $150 per trade).
-                                    <br />
-                                    <strong>Low of Day (LoD):</strong> Use the
-                                    low price of the entry day
-                                    (Qullamaggie-style swing trades). Uses Low
-                                    of Day for long positions and High of Day
-                                    for short positions.
-                                </p>
+                                    :options="[
+                                        { value: 'percent', label: 'Percentage' },
+                                        { value: 'dollar', label: 'Dollar amount' },
+                                        { value: 'lod', label: 'Low of Day (LoD)' }
+                                    ]"
+                                />
+                                <div class="mt-2 text-sm text-gray-500 dark:text-gray-400 space-y-1">
+                                    <p><strong class="text-gray-700 dark:text-gray-300">Percentage:</strong> Use a fixed percentage below/above entry price.</p>
+                                    <p><strong class="text-gray-700 dark:text-gray-300">Dollar amount:</strong> Use a fixed risk per trade in dollars (e.g., $100 or $150 per trade).</p>
+                                    <p><strong class="text-gray-700 dark:text-gray-300">Low of Day (LoD):</strong> Use the low price of the entry day (Qullamaggie-style swing trades). Uses Low of Day for long positions and High of Day for short positions.</p>
+                                </div>
                             </div>
 
                             <div
@@ -282,6 +358,7 @@
                                     analyticsForm.defaultStopLossType ===
                                     'percent'
                                 "
+                                class="py-6"
                             >
                                 <label for="defaultStopLoss" class="label"
                                     >Default Stop Loss Percentage</label
@@ -309,7 +386,7 @@
                                     </div>
                                 </div>
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Automatically apply this stop loss
                                     percentage to all new and imported trades.
@@ -317,12 +394,10 @@
                                     positions, the stop loss will be below entry
                                     price. For short positions, it will be above
                                     entry price.
-                                    <span
-                                        class="block mt-2 text-primary-600 dark:text-primary-400 font-medium"
-                                    >
-                                        Example: 2% stop loss on a $100 long
-                                        entry = $98 stop loss price
-                                    </span>
+                                </p>
+                                <p class="mt-1 text-sm text-primary-600 dark:text-primary-400 font-medium">
+                                    Example: 2% stop loss on a $100 long
+                                    entry = $98 stop loss price
                                 </p>
                             </div>
 
@@ -331,6 +406,7 @@
                                     analyticsForm.defaultStopLossType ===
                                     'dollar'
                                 "
+                                class="py-6"
                             >
                                 <label
                                     for="defaultStopLossDollars"
@@ -360,7 +436,7 @@
                                     </div>
                                 </div>
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Automatically apply this dollar risk per
                                     trade to all new and imported trades. Leave
@@ -369,17 +445,15 @@
                                     for a long, stop = entry - (dollars /
                                     quantity); for a short, stop = entry +
                                     (dollars / quantity).
-                                    <span
-                                        class="block mt-2 text-primary-600 dark:text-primary-400 font-medium"
-                                    >
-                                        Example: $100 stop loss on 50 shares =
-                                        $2 per share risk, so a $100 long entry
-                                        becomes $98 stop loss
-                                    </span>
+                                </p>
+                                <p class="mt-1 text-sm text-primary-600 dark:text-primary-400 font-medium">
+                                    Example: $100 stop loss on 50 shares =
+                                    $2 per share risk, so a $100 long entry
+                                    becomes $98 stop loss
                                 </p>
                             </div>
 
-                            <div>
+                            <div class="py-6">
                                 <label for="defaultTakeProfit" class="label"
                                     >Default Take Profit Percentage</label
                                 >
@@ -406,7 +480,7 @@
                                     </div>
                                 </div>
                                 <p
-                                    class="mt-1 text-sm text-gray-500 dark:text-gray-400"
+                                    class="mt-2 text-sm text-gray-500 dark:text-gray-400"
                                 >
                                     Automatically apply this take profit
                                     percentage to all new and imported trades.
@@ -414,16 +488,14 @@
                                     positions, the take profit will be above
                                     entry price. For short positions, it will be
                                     below entry price.
-                                    <span
-                                        class="block mt-2 text-primary-600 dark:text-primary-400 font-medium"
-                                    >
-                                        Example: 6% take profit on a $100 long
-                                        entry = $106 take profit price
-                                    </span>
+                                </p>
+                                <p class="mt-1 text-sm text-primary-600 dark:text-primary-400 font-medium">
+                                    Example: 6% take profit on a $100 long
+                                    entry = $106 take profit price
                                 </p>
                             </div>
 
-                            <div class="flex justify-end">
+                            <div class="pt-6 flex justify-end">
                                 <button
                                     type="submit"
                                     :disabled="analyticsLoading"
@@ -835,31 +907,22 @@
                                     <label for="aiProvider" class="label"
                                         >AI Provider</label
                                     >
-                                    <select
-                                        id="aiProvider"
+                                    <BaseSelect
                                         v-model="aiForm.provider"
-                                        class="input"
+                                        :options="[
+                                            { value: 'gemini', label: 'Google Gemini' },
+                                            { value: 'claude', label: 'Anthropic Claude' },
+                                            { value: 'openai', label: 'OpenAI' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'kimi', label: 'Kimi' },
+                                            { value: 'ollama', label: 'Ollama' },
+                                            { value: 'lmstudio', label: 'LM Studio' },
+                                            { value: 'perplexity', label: 'Perplexity AI' },
+                                            { value: 'local', label: 'Local/Custom' }
+                                        ]"
+                                        placeholder="No provider"
                                         @change="onProviderChange"
-                                    >
-                                        <option value="">No provider</option>
-                                        <option value="gemini">
-                                            Google Gemini
-                                        </option>
-                                        <option value="claude">
-                                            Anthropic Claude
-                                        </option>
-                                        <option value="openai">OpenAI</option>
-                                        <option value="ollama">Ollama</option>
-                                        <option value="lmstudio">
-                                            LM Studio
-                                        </option>
-                                        <option value="perplexity">
-                                            Perplexity AI
-                                        </option>
-                                        <option value="local">
-                                            Local/Custom
-                                        </option>
-                                    </select>
+                                    />
                                     <p
                                         class="mt-1 text-sm text-gray-500 dark:text-gray-400"
                                     >
@@ -1021,35 +1084,22 @@
                                             class="label"
                                             >CUSIP AI Provider</label
                                         >
-                                        <select
-                                            id="cusipAiProvider"
+                                        <BaseSelect
                                             v-model="cusipAiForm.provider"
-                                            class="input"
+                                            :options="[
+                                                { value: 'gemini', label: 'Google Gemini' },
+                                                { value: 'claude', label: 'Anthropic Claude' },
+                                                { value: 'openai', label: 'OpenAI' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'kimi', label: 'Kimi' },
+                                                { value: 'ollama', label: 'Ollama' },
+                                                { value: 'lmstudio', label: 'LM Studio' },
+                                                { value: 'perplexity', label: 'Perplexity AI' },
+                                                { value: 'local', label: 'Local/Custom' }
+                                            ]"
+                                            placeholder="No provider"
                                             @change="onCusipProviderChange"
-                                        >
-                                            <option value="">No provider</option>
-                                            <option value="gemini">
-                                                Google Gemini
-                                            </option>
-                                            <option value="claude">
-                                                Anthropic Claude
-                                            </option>
-                                            <option value="openai">
-                                                OpenAI
-                                            </option>
-                                            <option value="ollama">
-                                                Ollama
-                                            </option>
-                                            <option value="lmstudio">
-                                                LM Studio
-                                            </option>
-                                            <option value="perplexity">
-                                                Perplexity AI
-                                            </option>
-                                            <option value="local">
-                                                Local/Custom
-                                            </option>
-                                        </select>
+                                        />
                                     </div>
 
                                     <div>
@@ -1169,31 +1219,22 @@
                                     <label for="adminAiProvider" class="label"
                                         >Default AI Provider</label
                                     >
-                                    <select
-                                        id="adminAiProvider"
+                                    <BaseSelect
                                         v-model="adminAiForm.provider"
-                                        class="input"
+                                        :options="[
+                                            { value: 'gemini', label: 'Google Gemini' },
+                                            { value: 'claude', label: 'Anthropic Claude' },
+                                            { value: 'openai', label: 'OpenAI' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'kimi', label: 'Kimi' },
+                                            { value: 'ollama', label: 'Ollama' },
+                                            { value: 'lmstudio', label: 'LM Studio' },
+                                            { value: 'perplexity', label: 'Perplexity AI' },
+                                            { value: 'local', label: 'Local/Custom' }
+                                        ]"
+                                        placeholder="No provider"
                                         @change="onAdminProviderChange"
-                                    >
-                                        <option value="">No provider</option>
-                                        <option value="gemini">
-                                            Google Gemini
-                                        </option>
-                                        <option value="claude">
-                                            Anthropic Claude
-                                        </option>
-                                        <option value="openai">OpenAI</option>
-                                        <option value="ollama">Ollama</option>
-                                        <option value="lmstudio">
-                                            LM Studio
-                                        </option>
-                                        <option value="perplexity">
-                                            Perplexity AI
-                                        </option>
-                                        <option value="local">
-                                            Local/Custom
-                                        </option>
-                                    </select>
+                                    />
                                     <p
                                         class="mt-1 text-sm text-gray-500 dark:text-gray-400"
                                     >
@@ -1345,41 +1386,22 @@
                                             >
                                                 Checking Provider
                                             </label>
-                                            <select
-                                                id="adminAiClassifierProvider"
-                                                v-model="
-                                                    adminAiForm.classifierProvider
-                                                "
-                                                class="input"
-                                                @change="
-                                                    onAdminClassifierProviderChange
-                                                "
-                                            >
-                                                <option value="">
-                                                    Use default provider
-                                                </option>
-                                                <option value="gemini">
-                                                    Google Gemini
-                                                </option>
-                                                <option value="claude">
-                                                    Anthropic Claude
-                                                </option>
-                                                <option value="openai">
-                                                    OpenAI
-                                                </option>
-                                                <option value="ollama">
-                                                    Ollama
-                                                </option>
-                                                <option value="lmstudio">
-                                                    LM Studio
-                                                </option>
-                                                <option value="perplexity">
-                                                    Perplexity AI
-                                                </option>
-                                                <option value="local">
-                                                    Local/Custom
-                                                </option>
-                                            </select>
+                                            <BaseSelect
+                                                v-model="adminAiForm.classifierProvider"
+                                                :options="[
+                                                    { value: 'gemini', label: 'Google Gemini' },
+                                                    { value: 'claude', label: 'Anthropic Claude' },
+                                                    { value: 'openai', label: 'OpenAI' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'kimi', label: 'Kimi' },
+                                                    { value: 'ollama', label: 'Ollama' },
+                                                    { value: 'lmstudio', label: 'LM Studio' },
+                                                    { value: 'perplexity', label: 'Perplexity AI' },
+                                                    { value: 'local', label: 'Local/Custom' }
+                                                ]"
+                                                placeholder="Use default provider"
+                                                @change="onAdminClassifierProviderChange"
+                                            />
                                         </div>
 
                                         <div>
@@ -1532,35 +1554,22 @@
                                             class="label"
                                             >Default CUSIP AI Provider</label
                                         >
-                                        <select
-                                            id="adminCusipAiProvider"
+                                        <BaseSelect
                                             v-model="adminCusipAiForm.provider"
-                                            class="input"
+                                            :options="[
+                                                { value: 'gemini', label: 'Google Gemini' },
+                                                { value: 'claude', label: 'Anthropic Claude' },
+                                                { value: 'openai', label: 'OpenAI' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'kimi', label: 'Kimi' },
+                                                { value: 'ollama', label: 'Ollama' },
+                                                { value: 'lmstudio', label: 'LM Studio' },
+                                                { value: 'perplexity', label: 'Perplexity AI' },
+                                                { value: 'local', label: 'Local/Custom' }
+                                            ]"
+                                            placeholder="No provider"
                                             @change="onAdminCusipProviderChange"
-                                        >
-                                            <option value="">No provider</option>
-                                            <option value="gemini">
-                                                Google Gemini
-                                            </option>
-                                            <option value="claude">
-                                                Anthropic Claude
-                                            </option>
-                                            <option value="openai">
-                                                OpenAI
-                                            </option>
-                                            <option value="ollama">
-                                                Ollama
-                                            </option>
-                                            <option value="lmstudio">
-                                                LM Studio
-                                            </option>
-                                            <option value="perplexity">
-                                                Perplexity AI
-                                            </option>
-                                            <option value="local">
-                                                Local/Custom
-                                            </option>
-                                        </select>
+                                        />
                                     </div>
 
                                     <div>
@@ -1713,108 +1722,69 @@
                             Quality Grading Weights
                         </h3>
                         <p
-                            class="text-sm text-gray-600 dark:text-gray-400 mb-6"
+                            class="text-sm text-gray-600 dark:text-gray-400 mb-4"
                         >
                             Customize how much each metric contributes to your
-                            trade quality score. Weights must sum to 100%.
-                            Quality scores are calculated based on news
-                            sentiment, gap from previous close, relative volume,
-                            float, and price range.
+                            trade quality score. Stocks and options are graded
+                            on separate metric sets, so each has its own
+                            profile. Weights must sum to 100%. The minimum data
+                            coverage setting controls how much weighted metric
+                            data must be available before a score is assigned.
+                            Saving immediately re-grades all trades that already
+                            have a quality metric breakdown. Metrics with no available data are
+                            excluded from a trade's score and the remaining
+                            weights are rescaled. Futures are not graded.
                         </p>
+
+                        <!-- Profile tabs -->
+                        <div
+                            class="flex space-x-2 border-b border-gray-200 dark:border-gray-700 mb-6"
+                        >
+                            <button
+                                v-for="p in qualityProfileTabs"
+                                :key="p.key"
+                                type="button"
+                                @click="qualityProfile = p.key"
+                                class="px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors"
+                                :class="
+                                    qualityProfile === p.key
+                                        ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                                "
+                            >
+                                {{ p.label }}
+                            </button>
+                        </div>
 
                         <form
                             @submit.prevent="updateQualityWeights"
                             class="space-y-6"
                         >
-                            <!-- Weight Sliders -->
+                            <!-- Weight Sliders (driven by the active profile) -->
                             <div class="space-y-6">
-                                <!-- News Sentiment Weight -->
-                                <div>
+                                <div
+                                    v-for="metric in activeQualityMetrics"
+                                    :key="metric.key"
+                                >
                                     <div
                                         class="flex justify-between items-center mb-2"
                                     >
                                         <label
-                                            for="newsWeight"
+                                            :for="`qw-${metric.key}`"
                                             class="label text-sm"
-                                            >News Sentiment</label
+                                            >{{ metric.label }}</label
                                         >
                                         <span
                                             class="text-sm font-medium text-gray-900 dark:text-white"
                                             >{{
-                                                qualityWeightsForm.news
+                                                activeQualityWeights[metric.key]
                                             }}%</span
                                         >
                                     </div>
                                     <input
-                                        id="newsWeight"
-                                        v-model.number="qualityWeightsForm.news"
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        step="5"
-                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                                    />
-                                    <p
-                                        class="mt-1 text-xs text-gray-500 dark:text-gray-400"
-                                    >
-                                        Weight for news sentiment analysis
-                                        (bullish/bearish market sentiment)
-                                    </p>
-                                </div>
-
-                                <!-- Gap Weight -->
-                                <div>
-                                    <div
-                                        class="flex justify-between items-center mb-2"
-                                    >
-                                        <label
-                                            for="gapWeight"
-                                            class="label text-sm"
-                                            >Gap from Previous Close</label
-                                        >
-                                        <span
-                                            class="text-sm font-medium text-gray-900 dark:text-white"
-                                            >{{ qualityWeightsForm.gap }}%</span
-                                        >
-                                    </div>
-                                    <input
-                                        id="gapWeight"
-                                        v-model.number="qualityWeightsForm.gap"
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        step="5"
-                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                                    />
-                                    <p
-                                        class="mt-1 text-xs text-gray-500 dark:text-gray-400"
-                                    >
-                                        Weight for gap percentage from previous
-                                        day's close
-                                    </p>
-                                </div>
-
-                                <!-- Relative Volume Weight -->
-                                <div>
-                                    <div
-                                        class="flex justify-between items-center mb-2"
-                                    >
-                                        <label
-                                            for="relativeVolumeWeight"
-                                            class="label text-sm"
-                                            >Relative Volume</label
-                                        >
-                                        <span
-                                            class="text-sm font-medium text-gray-900 dark:text-white"
-                                            >{{
-                                                qualityWeightsForm.relativeVolume
-                                            }}%</span
-                                        >
-                                    </div>
-                                    <input
-                                        id="relativeVolumeWeight"
+                                        :id="`qw-${metric.key}`"
                                         v-model.number="
-                                            qualityWeightsForm.relativeVolume
+                                            activeQualityWeights[metric.key]
                                         "
                                         type="range"
                                         min="0"
@@ -1825,81 +1795,52 @@
                                     <p
                                         class="mt-1 text-xs text-gray-500 dark:text-gray-400"
                                     >
-                                        Weight for volume compared to 10-day
-                                        average
+                                        {{ metric.description }}
                                     </p>
                                 </div>
+                            </div>
 
-                                <!-- Float Weight -->
-                                <div>
-                                    <div
-                                        class="flex justify-between items-center mb-2"
-                                    >
+                            <div
+                                class="rounded-md border border-gray-200 dark:border-gray-700 p-4"
+                            >
+                                <div
+                                    class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                    <div>
                                         <label
-                                            for="floatWeight"
+                                            for="quality-minimum-coverage"
                                             class="label text-sm"
-                                            >Float (Shares Outstanding)</label
                                         >
+                                            Minimum Data Coverage
+                                        </label>
+                                        <p
+                                            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+                                        >
+                                            Lower values allow scores from less
+                                            available market data. Missing
+                                            metrics are still excluded and shown
+                                            in the breakdown.
+                                        </p>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <input
+                                            id="quality-minimum-coverage"
+                                            v-model.number="
+                                                qualityMinimumCoverageForm[
+                                                    qualityProfile
+                                                ]
+                                            "
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            step="5"
+                                            class="input w-24 text-right"
+                                        />
                                         <span
-                                            class="text-sm font-medium text-gray-900 dark:text-white"
-                                            >{{
-                                                qualityWeightsForm.float
-                                            }}%</span
+                                            class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                                            >%</span
                                         >
                                     </div>
-                                    <input
-                                        id="floatWeight"
-                                        v-model.number="
-                                            qualityWeightsForm.float
-                                        "
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        step="5"
-                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                                    />
-                                    <p
-                                        class="mt-1 text-xs text-gray-500 dark:text-gray-400"
-                                    >
-                                        Weight for number of shares outstanding
-                                        (lower float is better)
-                                    </p>
-                                </div>
-
-                                <!-- Price Range Weight -->
-                                <div>
-                                    <div
-                                        class="flex justify-between items-center mb-2"
-                                    >
-                                        <label
-                                            for="priceRangeWeight"
-                                            class="label text-sm"
-                                            >Price Range</label
-                                        >
-                                        <span
-                                            class="text-sm font-medium text-gray-900 dark:text-white"
-                                            >{{
-                                                qualityWeightsForm.priceRange
-                                            }}%</span
-                                        >
-                                    </div>
-                                    <input
-                                        id="priceRangeWeight"
-                                        v-model.number="
-                                            qualityWeightsForm.priceRange
-                                        "
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        step="5"
-                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                                    />
-                                    <p
-                                        class="mt-1 text-xs text-gray-500 dark:text-gray-400"
-                                    >
-                                        Weight for stock price range ($2-20 is
-                                        ideal)
-                                    </p>
                                 </div>
                             </div>
 
@@ -1967,7 +1908,7 @@
                                         ></div>
                                         Saving...
                                     </span>
-                                    <span v-else>Update Quality Weights</span>
+                                    <span v-else>Update {{ qualityProfile === 'option' ? 'Option' : 'Stock' }} Settings</span>
                                 </button>
                             </div>
                         </form>
@@ -2254,44 +2195,23 @@
                                         <label for="brokerName" class="label"
                                             >Broker</label
                                         >
-                                        <select
-                                            id="brokerName"
+                                        <BaseSelect
                                             v-model="brokerFeeForm.broker"
-                                            class="input"
                                             :disabled="editingBrokerFee"
-                                        >
-                                            <option value="">
-                                                Select a broker
-                                            </option>
-                                            <option value="avatrade">
-                                                AvaTrade
-                                            </option>
-                                            <option value="tradovate">
-                                                Tradovate
-                                            </option>
-                                            <option value="ninjatrader">
-                                                NinjaTrader
-                                            </option>
-                                            <option value="thinkorswim">
-                                                ThinkorSwim
-                                            </option>
-                                            <option value="ibkr">
-                                                Interactive Brokers
-                                            </option>
-                                            <option value="schwab">
-                                                Charles Schwab
-                                            </option>
-                                            <option value="lightspeed">
-                                                Lightspeed
-                                            </option>
-                                            <option value="webull">
-                                                Webull
-                                            </option>
-                                            <option value="etrade">
-                                                E*TRADE
-                                            </option>
-                                            <option value="other">Other</option>
-                                        </select>
+                                            :options="[
+                                                { value: 'avatrade', label: 'AvaTrade' },
+                                                { value: 'tradovate', label: 'Tradovate' },
+                                                { value: 'ninjatrader', label: 'NinjaTrader' },
+                                                { value: 'thinkorswim', label: 'ThinkorSwim' },
+                                                { value: 'ibkr', label: 'Interactive Brokers' },
+                                                { value: 'schwab', label: 'Charles Schwab' },
+                                                { value: 'lightspeed', label: 'Lightspeed' },
+                                                { value: 'webull', label: 'Webull' },
+                                                { value: 'etrade', label: 'E*TRADE' },
+                                                { value: 'other', label: 'Other' }
+                                            ]"
+                                            placeholder="Select a broker"
+                                        />
                                     </div>
 
                                     <div>
@@ -2596,6 +2516,55 @@
                         >
                             <p class="text-sm">{{ enrichmentMessage }}</p>
                         </div>
+
+                        <div
+                            class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700 flex items-start justify-between"
+                        >
+                            <div class="flex-1">
+                                <p
+                                    class="text-sm font-medium text-gray-900 dark:text-white"
+                                >
+                                    Recalculate Setup Quality
+                                </p>
+                                <p
+                                    class="text-xs text-gray-500 dark:text-gray-400 mt-1"
+                                >
+                                    Re-runs setup quality for existing trades
+                                    using the current calculation model and
+                                    stores any partial metric breakdowns.
+                                </p>
+                            </div>
+                            <button
+                                @click="recalculateSetupQuality"
+                                :disabled="qualityRecalculationLoading"
+                                class="btn-secondary ml-4 flex-shrink-0"
+                            >
+                                <span
+                                    v-if="qualityRecalculationLoading"
+                                    class="flex items-center"
+                                >
+                                    <div
+                                        class="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"
+                                    ></div>
+                                    Recalculating...
+                                </span>
+                                <span v-else>Recalculate Setup Quality</span>
+                            </button>
+                        </div>
+
+                        <div
+                            v-if="qualityRecalculationMessage"
+                            class="mt-4 p-3 rounded-md"
+                            :class="
+                                qualityRecalculationSuccess
+                                    ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200'
+                                    : 'bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200'
+                            "
+                        >
+                            <p class="text-sm">
+                                {{ qualityRecalculationMessage }}
+                            </p>
+                        </div>
                     </div>
                 </div>
             </template>
@@ -2841,6 +2810,7 @@ import {
     ArrowTopRightOnSquareIcon,
 } from "@heroicons/vue/24/outline";
 import LogsViewer from "@/components/admin/LogsViewer.vue";
+import BaseSelect from "@/components/common/BaseSelect.vue";
 
 const authStore = useAuthStore();
 const versionStore = useVersionStore();
@@ -2880,6 +2850,9 @@ const aiForm = ref({
 const aiLoading = ref(false);
 
 const currencyOptions = CURRENCY_OPTIONS;
+const currencySelectOptions = computed(() =>
+    currencyOptions.map((c) => ({ value: c.code, label: `${c.code} - ${c.name}` }))
+);
 
 // CUSIP AI Provider Settings
 const cusipAiForm = ref({
@@ -2895,6 +2868,8 @@ const cusipAiLoading = ref(false);
 // Analytics Settings
 const analyticsForm = ref({
     statisticsCalculation: "average",
+    analyticsPositionGrouping: false,
+    edgeReportEnabled: false,
     breakevenToleranceTicks: 0,
     autoCloseExpiredOptions: true,
     defaultStopLossType: "percent",
@@ -2967,24 +2942,102 @@ const brokerFeeForm = ref({
 const brokerFeeLoading = ref(false);
 const editingBrokerFee = ref(null);
 
-// Quality Weights Settings
-const qualityWeightsForm = ref({
-    news: 30,
-    gap: 20,
-    relativeVolume: 20,
-    float: 15,
-    priceRange: 15,
-});
+// Quality Weights Settings - per instrument profile (stock, option)
 const qualityWeightsLoading = ref(false);
+const qualityProfile = ref("stock");
 
-// Computed property for total weights
+// Metric labels and help text, keyed by API weight key
+const qualityMetricInfo = {
+    news: {
+        label: "News Sentiment",
+        description:
+            "Weight for news sentiment (bullish/bearish). Options use the underlying's news.",
+    },
+    gap: {
+        label: "Gap from Previous Close",
+        description:
+            "Weight for gap percentage from the previous day's close. Options use the underlying.",
+    },
+    relativeVolume: {
+        label: "Relative Volume",
+        description:
+            "Weight for volume compared to the 10-day average. Options use the underlying.",
+    },
+    float: {
+        label: "Float (Shares Outstanding)",
+        description:
+            "Weight for shares outstanding (lower float scores higher).",
+    },
+    priceRange: {
+        label: "Price Range",
+        description: "Weight for stock price range ($2-20 is ideal).",
+    },
+    dte: {
+        label: "Days to Expiration",
+        description:
+            "Weight for time to expiration at entry (3-6 weeks scores highest).",
+    },
+    moneyness: {
+        label: "Strike Distance (Moneyness)",
+        description:
+            "Weight for how far in or out of the money the strike was at entry (near the money scores highest).",
+    },
+};
+
+// Per-profile metric keys + defaults, populated from the API (with fallbacks)
+const qualityProfilesMeta = ref({
+    stock: {
+        weightKeys: ["news", "gap", "relativeVolume", "float", "priceRange"],
+        defaults: { news: 30, gap: 20, relativeVolume: 20, float: 15, priceRange: 15 },
+        defaultMinimumCoverage: 40,
+    },
+    option: {
+        weightKeys: ["news", "gap", "relativeVolume", "dte", "moneyness"],
+        defaults: { news: 25, gap: 15, relativeVolume: 15, dte: 25, moneyness: 20 },
+        defaultMinimumCoverage: 40,
+    },
+});
+
+// Current weight values per profile
+const qualityProfilesForm = ref({
+    stock: { news: 30, gap: 20, relativeVolume: 20, float: 15, priceRange: 15 },
+    option: { news: 25, gap: 15, relativeVolume: 15, dte: 25, moneyness: 20 },
+});
+
+const qualityMinimumCoverageForm = ref({
+    stock: 40,
+    option: 40,
+});
+
+const qualityProfileTabs = [
+    { key: "stock", label: "Stocks" },
+    { key: "option", label: "Options" },
+];
+
+// The metric rows (label + description) for the active profile
+const activeQualityMetrics = computed(() => {
+    const meta = qualityProfilesMeta.value[qualityProfile.value];
+    if (!meta) return [];
+    return meta.weightKeys.map((key) => ({
+        key,
+        label: qualityMetricInfo[key]?.label || key,
+        description: qualityMetricInfo[key]?.description || "",
+    }));
+});
+
+// The weight values object the sliders bind to for the active profile
+const activeQualityWeights = computed(
+    () => qualityProfilesForm.value[qualityProfile.value],
+);
+
+// Computed property for total weights of the active profile
 const weightsTotal = computed(() => {
-    return (
-        qualityWeightsForm.value.news +
-        qualityWeightsForm.value.gap +
-        qualityWeightsForm.value.relativeVolume +
-        qualityWeightsForm.value.float +
-        qualityWeightsForm.value.priceRange
+    const meta = qualityProfilesMeta.value[qualityProfile.value];
+    const weights = qualityProfilesForm.value[qualityProfile.value];
+    if (!meta || !weights) return 0;
+    return meta.weightKeys.reduce(
+        (sum, key) => sum + (Number(weights[key]) || 0),
+        0,
     );
 });
 
@@ -3022,6 +3075,9 @@ const selectedFile = ref(null);
 const enrichmentLoading = ref(false);
 const enrichmentMessage = ref("");
 const enrichmentSuccess = ref(false);
+const qualityRecalculationLoading = ref(false);
+const qualityRecalculationMessage = ref("");
+const qualityRecalculationSuccess = ref(false);
 
 // Get API docs URL
 function getApiDocsUrl() {
@@ -3043,6 +3099,10 @@ function getModelPlaceholder() {
             return "e.g., claude-3-5-sonnet";
         case "openai":
             return "e.g., gpt-4o";
+        case "deepseek":
+            return "e.g., deepseek-chat";
+        case "kimi":
+            return "e.g., moonshot-v1-8k";
         case "ollama":
             return "e.g., llama3.1";
         case "lmstudio":
@@ -3063,6 +3123,10 @@ function getApiKeyPlaceholder() {
         case "claude":
             return "sk-ant-...";
         case "openai":
+            return "sk-...";
+        case "deepseek":
+            return "sk-...";
+        case "kimi":
             return "sk-...";
         case "ollama":
             return "Optional API key";
@@ -3085,6 +3149,10 @@ function getApiKeyHelp() {
             return "Get your API key from Anthropic Console";
         case "openai":
             return "Get your API key from OpenAI Dashboard";
+        case "deepseek":
+            return "Get your API key from DeepSeek Platform";
+        case "kimi":
+            return "Get your API key from Moonshot AI Platform";
         case "ollama":
             return "API key is optional for Ollama";
         case "perplexity":
@@ -3150,6 +3218,10 @@ function getCusipModelPlaceholder() {
             return "e.g., claude-3-5-sonnet-20241022";
         case "openai":
             return "e.g., gpt-4o";
+        case "deepseek":
+            return "e.g., deepseek-chat";
+        case "kimi":
+            return "e.g., moonshot-v1-8k";
         case "ollama":
             return "e.g., llama3.2";
         case "perplexity":
@@ -3169,6 +3241,10 @@ function getCusipApiKeyPlaceholder() {
             return "Your Anthropic API key";
         case "openai":
             return "Your OpenAI API key";
+        case "deepseek":
+            return "Your DeepSeek API key";
+        case "kimi":
+            return "Your Moonshot AI API key";
         case "perplexity":
             return "Your Perplexity API key";
         default:
@@ -3238,6 +3314,10 @@ async function loadAnalyticsSettings() {
         analyticsForm.value = {
             statisticsCalculation:
                 response.data.settings.statisticsCalculation || "average",
+            analyticsPositionGrouping:
+                response.data.settings.analyticsPositionGrouping === true,
+            edgeReportEnabled:
+                response.data.settings.edgeReportEnabled === true,
             breakevenToleranceTicks:
                 Number(response.data.settings.breakevenToleranceTicks) || 0,
             autoCloseExpiredOptions:
@@ -3262,6 +3342,7 @@ async function loadAnalyticsSettings() {
         console.error("Failed to load analytics settings:", error);
         // Default values if loading fails
         analyticsForm.value.statisticsCalculation = "average";
+        analyticsForm.value.analyticsPositionGrouping = false;
         analyticsForm.value.breakevenToleranceTicks = 0;
         analyticsForm.value.autoCloseExpiredOptions = true;
         analyticsForm.value.defaultStopLossType = "percent";
@@ -3277,6 +3358,10 @@ async function updateAnalyticsSettings() {
     try {
         await api.put("/settings", {
             statisticsCalculation: analyticsForm.value.statisticsCalculation,
+            analyticsPositionGrouping:
+                analyticsForm.value.analyticsPositionGrouping === true,
+            edgeReportEnabled:
+                analyticsForm.value.edgeReportEnabled === true,
             breakevenToleranceTicks:
                 Number(analyticsForm.value.breakevenToleranceTicks) || 0,
             breakevenToleranceTicksByUnderlying: breakevenMapFromRows(),
@@ -3496,14 +3581,39 @@ function deleteBrokerFee(id) {
 async function fetchQualityWeights() {
     try {
         const response = await api.get("/users/quality-weights");
-        if (response.data && response.data.qualityWeights) {
-            qualityWeightsForm.value = {
-                news: response.data.qualityWeights.news,
-                gap: response.data.qualityWeights.gap,
-                relativeVolume: response.data.qualityWeights.relativeVolume,
-                float: response.data.qualityWeights.float,
-                priceRange: response.data.qualityWeights.priceRange,
-            };
+        const data = response.data || {};
+        if (data.profilesMeta) {
+            qualityProfilesMeta.value = data.profilesMeta;
+        }
+        if (data.profiles) {
+            // Seed each profile's form from the API, keeping only its keys
+            const next = {};
+            for (const [profileType, meta] of Object.entries(
+                qualityProfilesMeta.value,
+            )) {
+                const stored = data.profiles[profileType] || {};
+                const weights = {};
+                for (const key of meta.weightKeys) {
+                    weights[key] =
+                        stored[key] != null
+                            ? stored[key]
+                            : meta.defaults[key];
+                }
+                next[profileType] = weights;
+            }
+            qualityProfilesForm.value = next;
+        }
+        if (data.minimumCoverage) {
+            const nextCoverage = { ...qualityMinimumCoverageForm.value };
+            for (const [profileType, meta] of Object.entries(
+                qualityProfilesMeta.value,
+            )) {
+                const value = Number(data.minimumCoverage[profileType]);
+                nextCoverage[profileType] = Number.isFinite(value)
+                    ? value
+                    : meta.defaultMinimumCoverage || 40;
+            }
+            qualityMinimumCoverageForm.value = nextCoverage;
         }
     } catch (error) {
         console.error("Failed to fetch quality weights:", error);
@@ -3514,14 +3624,19 @@ async function fetchQualityWeights() {
 async function updateQualityWeights() {
     qualityWeightsLoading.value = true;
     try {
-        await api.put("/users/quality-weights", {
-            news: qualityWeightsForm.value.news,
-            gap: qualityWeightsForm.value.gap,
-            relativeVolume: qualityWeightsForm.value.relativeVolume,
-            float: qualityWeightsForm.value.float,
-            priceRange: qualityWeightsForm.value.priceRange,
+        const profileType = qualityProfile.value;
+        const response = await api.put("/users/quality-weights", {
+            profile: profileType,
+            weights: { ...qualityProfilesForm.value[profileType] },
+            minimumCoverage: qualityMinimumCoverageForm.value[profileType],
         });
-        showSuccess("Success", "Quality grading weights updated successfully");
+        const regraded = response.data?.regradedCount;
+        showSuccess(
+            "Success",
+            regraded > 0
+                ? `Quality grading settings updated. ${regraded} trade${regraded === 1 ? "" : "s"} re-graded with the new settings.`
+                : "Quality grading settings updated successfully",
+        );
     } catch (error) {
         console.error("Failed to update quality weights:", error);
         showError(
@@ -3534,13 +3649,12 @@ async function updateQualityWeights() {
 }
 
 function resetQualityWeights() {
-    qualityWeightsForm.value = {
-        news: 30,
-        gap: 20,
-        relativeVolume: 20,
-        float: 15,
-        priceRange: 15,
-    };
+    const profileType = qualityProfile.value;
+    const meta = qualityProfilesMeta.value[profileType];
+    if (!meta) return;
+    qualityProfilesForm.value[profileType] = { ...meta.defaults };
+    qualityMinimumCoverageForm.value[profileType] =
+        meta.defaultMinimumCoverage || 40;
 }
 
 // Admin AI Settings Functions
@@ -3631,6 +3745,10 @@ function getAdminClassifierModelPlaceholder() {
             return "claude-3-haiku-20240307";
         case "openai":
             return "gpt-4o-mini";
+        case "deepseek":
+            return "deepseek-chat";
+        case "kimi":
+            return "moonshot-v1-8k";
         case "ollama":
             return "llama3.1";
         case "lmstudio":
@@ -3665,6 +3783,10 @@ function getAdminClassifierApiKeyPlaceholder() {
             return "Enter Anthropic Claude API key";
         case "openai":
             return "Enter OpenAI API key";
+        case "deepseek":
+            return "Enter DeepSeek API key";
+        case "kimi":
+            return "Enter Moonshot AI API key";
         case "perplexity":
             return "Enter Perplexity API key";
         case "ollama":
@@ -3683,6 +3805,10 @@ function getAdminModelPlaceholder() {
             return "claude-3-5-sonnet-20241022";
         case "openai":
             return "gpt-4o";
+        case "deepseek":
+            return "deepseek-chat";
+        case "kimi":
+            return "moonshot-v1-8k";
         case "ollama":
             return "llama3.1";
         case "lmstudio":
@@ -3704,6 +3830,10 @@ function getAdminApiKeyPlaceholder() {
             return "Enter Anthropic Claude API key";
         case "openai":
             return "Enter OpenAI API key";
+        case "deepseek":
+            return "Enter DeepSeek API key";
+        case "kimi":
+            return "Enter Moonshot AI API key";
         case "ollama":
             return "Optional: Enter Ollama API key";
         default:
@@ -3719,6 +3849,10 @@ function getAdminApiKeyHelp() {
             return "Get your API key at: https://console.anthropic.com/";
         case "openai":
             return "Get your API key at: https://platform.openai.com/api-keys";
+        case "deepseek":
+            return "Get your API key at: https://platform.deepseek.com/api_keys";
+        case "kimi":
+            return "Get your API key at: https://platform.moonshot.ai/console/api-keys";
         case "ollama":
             return "API key is optional for Ollama. Leave blank if not needed.";
         default:
@@ -3791,6 +3925,10 @@ function getAdminCusipModelPlaceholder() {
             return "claude-3-5-sonnet-20241022";
         case "openai":
             return "gpt-4o";
+        case "deepseek":
+            return "deepseek-chat";
+        case "kimi":
+            return "moonshot-v1-8k";
         case "ollama":
             return "llama3.1";
         case "lmstudio":
@@ -3812,6 +3950,10 @@ function getAdminCusipApiKeyPlaceholder() {
             return "Enter Anthropic Claude API key";
         case "openai":
             return "Enter OpenAI API key";
+        case "deepseek":
+            return "Enter DeepSeek API key";
+        case "kimi":
+            return "Enter Moonshot AI API key";
         case "ollama":
             return "Optional: Enter Ollama API key";
         default:
@@ -3965,7 +4107,7 @@ async function enrichTrades() {
         } else {
             showSuccess(
                 "All Set",
-                "All your trades are already enriched with news data!",
+                "All your trades are already enriched with news and current setup quality data.",
             );
         }
     } catch (error) {
@@ -3976,6 +4118,31 @@ async function enrichTrades() {
         showError("Enrichment Failed", enrichmentMessage.value);
     } finally {
         enrichmentLoading.value = false;
+    }
+}
+
+async function recalculateSetupQuality() {
+    qualityRecalculationLoading.value = true;
+    qualityRecalculationMessage.value = "";
+    qualityRecalculationSuccess.value = false;
+
+    try {
+        const response = await api.post("/trades/quality/all");
+
+        qualityRecalculationSuccess.value = true;
+        qualityRecalculationMessage.value = response.data.message;
+        showSuccess(
+            "Recalculation Started",
+            response.data.message || "Setup quality recalculation started in the background.",
+        );
+    } catch (error) {
+        console.error("Setup quality recalculation failed:", error);
+        qualityRecalculationSuccess.value = false;
+        qualityRecalculationMessage.value =
+            error.response?.data?.error || "Failed to start setup quality recalculation";
+        showError("Recalculation Failed", qualityRecalculationMessage.value);
+    } finally {
+        qualityRecalculationLoading.value = false;
     }
 }
 

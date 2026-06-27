@@ -1,11 +1,14 @@
 const db = require('../config/database');
 const Trade = require('../models/Trade');
 const TradeQueries = require('./tradeQueries');
+const { isPositionGroupingEnabled } = require('../utils/positionGrouping');
 const AICreditService = require('./aiCreditService');
 const AIProvider = require('../utils/aiProvider');
 const TierService = require('./tierService');
 const { validateAiProviderUrl } = require('../utils/urlSecurity');
 const adminSettingsService = require('./adminSettings');
+const Playbook = require('../models/Playbook');
+const PlaybookAdherenceService = require('./playbookAdherence.service');
 
 /**
  * AI Session Service
@@ -31,6 +34,8 @@ class AISessionService {
       openai: 'gpt-4o-mini',
       claude: 'claude-3-haiku-20240307',
       perplexity: 'sonar',
+      deepseek: 'deepseek-chat',
+      kimi: 'moonshot-v1-8k',
       lmstudio: 'local-model',
       ollama: 'local-model',
       local: 'local-model'
@@ -176,6 +181,69 @@ ${clippedMessage}`;
     return normalized;
   }
 
+  static formatStrategyLabel(value) {
+    if (!value) return null;
+    return String(value).replace(/_/g, ' ');
+  }
+
+  // JS mirror of POSITION_GROUP_KEY in utils/positionGrouping.js: persisted
+  // group id first, conservative account + underlying + exact entry_time key
+  // for ungrouped legacy rows.
+  static positionGroupKey(trade) {
+    if (trade.position_group_id) return String(trade.position_group_id);
+    const underlying = (trade.underlying_symbol && String(trade.underlying_symbol).trim() !== '')
+      ? trade.underlying_symbol
+      : trade.symbol;
+    const entry = trade.entry_time ? new Date(trade.entry_time).toISOString() : String(trade.id);
+    return `${trade.account_identifier || ''}|${underlying}|${entry}`;
+  }
+
+  // Collapse multi-leg positions into one synthetic trade each so the AI sees
+  // a spread/condor as a single position (issue #339). Single-leg groups pass
+  // through untouched. Mirrors the grouped completed_trades CTE in
+  // TradeQueries.getAnalytics so sample trades stay consistent with metrics.
+  static collapsePositionGroups(trades) {
+    const groups = new Map();
+    trades.forEach(trade => {
+      const key = this.positionGroupKey(trade);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(trade);
+    });
+
+    return [...groups.values()].map(legs => {
+      if (legs.length === 1) return legs[0];
+
+      const first = legs[0];
+      const sum = field => legs.reduce((total, leg) => total + (parseFloat(leg[field]) || 0), 0);
+      const earliestEntry = legs.reduce((min, leg) => {
+        if (!leg.entry_time) return min;
+        return (!min || new Date(leg.entry_time) < new Date(min)) ? leg.entry_time : min;
+      }, null);
+      const allClosed = legs.every(leg => leg.exit_price !== null && leg.exit_price !== undefined);
+      const strategyLabel = this.formatStrategyLabel(first.group_detected_strategy)
+        || first.strategy
+        || 'multi-leg option';
+
+      return {
+        ...first,
+        symbol: (first.underlying_symbol && String(first.underlying_symbol).trim() !== '')
+          ? first.underlying_symbol
+          : first.symbol,
+        side: strategyLabel,
+        strategy: strategyLabel,
+        pnl: sum('pnl'),
+        commission: sum('commission'),
+        fees: sum('fees'),
+        entry_time: earliestEntry || first.entry_time,
+        entry_price: null,
+        exit_price: null,
+        is_position_group: true,
+        leg_count: legs.length,
+        position_status: allClosed ? 'closed' : 'open'
+      };
+    });
+  }
+
   /**
    * Build a compressed trade summary for AI context
    * @param {string} userId - User ID
@@ -198,7 +266,16 @@ ${clippedMessage}`;
       limit: 100,
       offset: 0
     });
-    const trades = tradesResult.trades || tradesResult;
+    let trades = tradesResult.trades || tradesResult;
+
+    // Whole-trade analysis (issue #339): getAnalytics already collapses
+    // multi-leg positions when the setting is on, so the JS-side patterns and
+    // sample trades must collapse the same way or the AI would see per-leg
+    // wins/losses that contradict the per-position metrics.
+    const positionGroupingEnabled = await isPositionGroupingEnabled(userId);
+    if (positionGroupingEnabled) {
+      trades = this.collapsePositionGroups(trades);
+    }
 
     // Extract key patterns
     const symbols = [...new Set(trades.map(t => t.symbol))].slice(0, 20);
@@ -233,28 +310,31 @@ ${clippedMessage}`;
       .filter(t => t.pnl !== null && t.pnl !== undefined)
       .sort((a, b) => parseFloat(b.pnl) - parseFloat(a.pnl));
 
-    const bestTrades = sortedByPnL.slice(0, 3).map(t => ({
+    const mapSampleTrade = t => ({
       symbol: t.symbol,
       side: t.side,
       pnl: parseFloat(t.pnl).toFixed(2),
-      date: t.entry_time
-    }));
+      date: t.entry_time,
+      ...(t.is_position_group ? { legs: t.leg_count } : {})
+    });
 
-    const worstTrades = sortedByPnL.slice(-3).reverse().map(t => ({
-      symbol: t.symbol,
-      side: t.side,
-      pnl: parseFloat(t.pnl).toFixed(2),
-      date: t.entry_time
-    }));
+    const bestTrades = sortedByPnL.slice(0, 3).map(mapSampleTrade);
+
+    const worstTrades = sortedByPnL.slice(-3).reverse().map(mapSampleTrade);
 
     // Recent trades for sample context
     const recentTrades = trades.slice(0, 5).map(t => ({
       symbol: t.symbol,
       side: t.side,
-      entry_price: parseFloat(t.entry_price).toFixed(2),
-      exit_price: t.exit_price ? parseFloat(t.exit_price).toFixed(2) : 'OPEN',
+      entry_price: (t.entry_price !== null && t.entry_price !== undefined)
+        ? parseFloat(t.entry_price).toFixed(2)
+        : null,
+      exit_price: t.exit_price
+        ? parseFloat(t.exit_price).toFixed(2)
+        : (t.is_position_group && t.position_status === 'closed' ? 'CLOSED' : 'OPEN'),
       pnl: parseFloat(t.pnl || 0).toFixed(2),
-      broker: t.broker
+      broker: t.broker,
+      ...(t.is_position_group ? { legs: t.leg_count, status: t.position_status } : {})
     }));
 
     // Format hourly data
@@ -309,6 +389,11 @@ ${clippedMessage}`;
         worst: worstTrades
       },
 
+      // Whole-trade grouping context (issue #339)
+      position_grouping: {
+        enabled: positionGroupingEnabled
+      },
+
       // Filter context
       filters_applied: filters,
       generated_at: new Date().toISOString()
@@ -342,6 +427,16 @@ TRADER PROFILE:
 `;
     }
 
+    const positionGroupingNote = tradeSummary.position_grouping?.enabled
+      ? `
+NOTE ON POSITION GROUPING: Multi-leg option positions (vertical spreads, iron condors, straddles, etc.) are combined into single positions in this data. Win rate, trade counts, and sample trades are measured per position, not per individual leg. Sample entries marked with a leg count represent a whole multi-leg strategy whose P&L is the net of all legs; evaluate them as one strategy decision, not as separate trades.
+`
+      : '';
+
+    const formatSampleResult = t => t.legs
+      ? `- ${t.symbol}: ${t.side} (${t.legs} legs), net P&L: $${t.pnl} (${t.date})`
+      : `- ${t.symbol}: $${t.pnl} (${t.date})`;
+
     const prompt = `You are a professional trading performance analyst. Analyze the following trading data and provide actionable recommendations.
 
 ${profileSection}TRADING PERFORMANCE METRICS:
@@ -352,6 +447,7 @@ ${profileSection}TRADING PERFORMANCE METRICS:
 - Profit Factor: ${metrics.profit_factor}
 - Best Trade: $${metrics.best_trade}
 - Worst Trade: $${metrics.worst_trade}
+${positionGroupingNote}
 
 TRADING PATTERNS:
 - Symbols Traded: ${patterns.symbols_traded?.slice(0, 10).join(', ') || 'N/A'}
@@ -364,13 +460,15 @@ TIME-BASED ANALYSIS:
 - Best Days: ${timeAnalysis.daily_pnl?.slice(0, 3).map(d => `${d.day} ($${d.pnl})`).join(', ') || 'N/A'}
 
 RECENT TRADES:
-${sampleTrades.recent?.map(t => `- ${t.symbol}: ${t.side} @ $${t.entry_price} -> ${t.exit_price}, P&L: $${t.pnl}`).join('\n') || 'No recent trades'}
+${sampleTrades.recent?.map(t => t.legs
+    ? `- ${t.symbol}: ${t.side} (${t.legs} legs, ${t.status || 'closed'}), net P&L: $${t.pnl}`
+    : `- ${t.symbol}: ${t.side} @ $${t.entry_price} -> ${t.exit_price}, P&L: $${t.pnl}`).join('\n') || 'No recent trades'}
 
 BEST TRADES:
-${sampleTrades.best?.map(t => `- ${t.symbol}: $${t.pnl} (${t.date})`).join('\n') || 'N/A'}
+${sampleTrades.best?.map(formatSampleResult).join('\n') || 'N/A'}
 
 WORST TRADES:
-${sampleTrades.worst?.map(t => `- ${t.symbol}: $${t.pnl} (${t.date})`).join('\n') || 'N/A'}
+${sampleTrades.worst?.map(formatSampleResult).join('\n') || 'N/A'}
 
 Please provide a comprehensive analysis with:
 1. **STRENGTHS**: What the trader is doing well
@@ -408,6 +506,94 @@ Keep recommendations specific and data-driven. Use bullet points for clarity.`;
     }, {});
   }
 
+  static mapReviewForAI(review) {
+    if (!review) return null;
+
+    const score = review.adherence_score !== null && review.adherence_score !== undefined
+      ? Number(review.adherence_score)
+      : null;
+
+    return this.compactObject({
+      profile_name: review.playbook_name,
+      score,
+      grade: review.playbook_review_mode === 'score'
+        && score !== null
+        ? PlaybookAdherenceService.scoreToGrade(score)
+        : null,
+      review_mode: review.playbook_review_mode === 'score' ? 'score' : 'checklist',
+      followed_plan: review.followed_plan,
+      checklist_score: review.checklist_score !== null && review.checklist_score !== undefined
+        ? Number(review.checklist_score)
+        : null,
+      review_notes: review.review_notes,
+      criterion_responses: review.checklist_responses || [],
+      rule_results: review.rule_results || [],
+      violation_summary: review.violation_summary || [],
+      reviewed_at: review.reviewed_at
+    });
+  }
+
+  static buildQualityContext(trade, reviews = []) {
+    const automatedSetupQuality = this.compactObject({
+      grade: trade.quality_grade,
+      score: trade.quality_score,
+      metrics: trade.quality_metrics
+    });
+    const playbookAssessment = this.mapReviewForAI(
+      reviews.find(review => review.review_type === 'adherence')
+    );
+    const manualGradingProfile = this.mapReviewForAI(
+      reviews.find(review => review.review_type === 'manual_grading')
+    );
+
+    const context = this.compactObject({
+      automated_setup_quality: Object.keys(automatedSetupQuality).length ? automatedSetupQuality : null,
+      playbook_assessment: playbookAssessment,
+      manual_grading_profile: manualGradingProfile
+    });
+
+    return Object.keys(context).length ? context : null;
+  }
+
+  static getQualityContextSources(qualityContext) {
+    const sources = [];
+    if (qualityContext?.automated_setup_quality) sources.push('automated_setup_quality');
+    if (qualityContext?.playbook_assessment) sources.push('playbook_assessment');
+    if (qualityContext?.manual_grading_profile) sources.push('manual_grading_profile');
+    return sources;
+  }
+
+  static formatQualityContextForPrompt(qualityContext) {
+    if (!qualityContext || Object.keys(qualityContext).length === 0) {
+      return 'No automated setup quality, playbook assessment, or manual grading profile was available for this trade.';
+    }
+
+    const lines = [];
+    if (qualityContext.automated_setup_quality) {
+      const setup = qualityContext.automated_setup_quality;
+      lines.push(`- Automated Setup Quality: ${setup.grade || 'N/A'}${setup.score !== undefined ? ` (${setup.score}/5)` : ''}`);
+      if (setup.metrics) {
+        lines.push(`  Metrics: ${JSON.stringify(setup.metrics)}`);
+      }
+    }
+    if (qualityContext.playbook_assessment) {
+      const review = qualityContext.playbook_assessment;
+      lines.push(`- Playbook Assessment: ${review.profile_name || 'Unnamed playbook'}${review.score !== undefined ? ` (${review.score}%)` : ''}${review.followed_plan !== undefined ? `, followed plan: ${review.followed_plan ? 'yes' : 'no'}` : ''}`);
+      if (review.review_notes) lines.push(`  Notes: ${review.review_notes}`);
+      if (review.criterion_responses?.length) lines.push(`  Responses: ${JSON.stringify(review.criterion_responses)}`);
+      if (review.rule_results?.length) lines.push(`  Rule results: ${JSON.stringify(review.rule_results)}`);
+    }
+    if (qualityContext.manual_grading_profile) {
+      const review = qualityContext.manual_grading_profile;
+      lines.push(`- Manual Grading Profile: ${review.profile_name || 'Unnamed grading profile'}${review.grade ? ` grade ${review.grade}` : ''}${review.score !== undefined ? ` (${review.score}%)` : ''}`);
+      if (review.review_notes) lines.push(`  Notes: ${review.review_notes}`);
+      if (review.criterion_responses?.length) lines.push(`  Criterion scores: ${JSON.stringify(review.criterion_responses)}`);
+      if (review.rule_results?.length) lines.push(`  Rule results: ${JSON.stringify(review.rule_results)}`);
+    }
+
+    return lines.join('\n');
+  }
+
   static async buildSingleTradeSummary(userId, tradeId) {
     if (!tradeId || typeof tradeId !== 'string') {
       throw new Error('Trade ID is required for single trade analysis');
@@ -434,6 +620,78 @@ Keep recommendations specific and data-driven. Use bullet points for clarity.`;
       }));
 
     const newsEvents = Array.isArray(trade.news_events) ? trade.news_events : [];
+    let tradeReviews = [];
+    try {
+      tradeReviews = await Playbook.getTradeReviewsByTradeId(tradeId, userId);
+    } catch (error) {
+      console.warn('[AI_SESSION] Could not load trade reviews for AI context:', error.message);
+    }
+    const qualityContext = this.buildQualityContext(trade, tradeReviews);
+
+    // Multi-leg combo context (issue #339): when the trade belongs to a
+    // detected option strategy group, give the AI every leg so it analyzes the
+    // combined structure instead of judging one leg in isolation.
+    let positionGroup = null;
+    if (trade.position_group_id) {
+      try {
+        const groupResult = await db.query(
+          `SELECT id, detected_strategy, strategy_confidence, leg_count,
+                  underlying_symbol, expiration_date, is_completed
+           FROM trade_position_groups
+           WHERE id = $1 AND user_id = $2`,
+          [trade.position_group_id, userId]
+        );
+        const group = groupResult.rows[0];
+
+        if (group) {
+          const legsResult = await db.query(
+            `SELECT id, symbol, option_type, strike_price, expiration_date, side,
+                    quantity, entry_price, exit_price, entry_time, exit_time,
+                    pnl, commission, fees
+             FROM trades
+             WHERE position_group_id = $1 AND user_id = $2
+             ORDER BY entry_time ASC, strike_price ASC NULLS LAST`,
+            [group.id, userId]
+          );
+
+          const legs = legsResult.rows;
+          const combinedPnl = legs.reduce((total, leg) => total + (parseFloat(leg.pnl) || 0), 0);
+          const combinedCosts = legs.reduce(
+            (total, leg) => total + (parseFloat(leg.commission) || 0) + (parseFloat(leg.fees) || 0),
+            0
+          );
+
+          positionGroup = {
+            group_id: group.id,
+            detected_strategy: group.detected_strategy,
+            strategy_label: this.formatStrategyLabel(group.detected_strategy),
+            strategy_confidence: group.strategy_confidence,
+            leg_count: group.leg_count,
+            underlying_symbol: group.underlying_symbol,
+            expiration_date: group.expiration_date,
+            is_completed: group.is_completed === true,
+            combined_pnl: combinedPnl,
+            combined_costs: combinedCosts,
+            legs: legs.map(leg => this.compactObject({
+              symbol: leg.symbol,
+              option_type: leg.option_type,
+              strike_price: leg.strike_price,
+              expiration_date: leg.expiration_date,
+              side: leg.side,
+              quantity: leg.quantity,
+              entry_price: leg.entry_price,
+              exit_price: leg.exit_price,
+              entry_time: leg.entry_time,
+              exit_time: leg.exit_time,
+              pnl: leg.pnl,
+              is_analyzed_leg: leg.id === trade.id ? true : undefined
+            }))
+          };
+        }
+      } catch (error) {
+        console.warn('[AI_SESSION] Could not load position group for trade:', error.message);
+      }
+    }
 
     return {
       analysis_type: 'single_trade',
@@ -479,6 +737,7 @@ Keep recommendations specific and data-driven. Use bullet points for clarity.`;
         quality_metrics: trade.quality_metrics,
         playbook_id: trade.playbook_id
       }),
+      quality_context: qualityContext,
       executions: executions.map(execution => this.compactObject({
         action: execution.action || execution.side,
         quantity: execution.quantity,
@@ -492,6 +751,7 @@ Keep recommendations specific and data-driven. Use bullet points for clarity.`;
         commission: execution.commission,
         fees: execution.fees
       })),
+      position_group: positionGroup,
       enrichment: {
         sector: trade.sector || null,
         company_name: trade.company_name || null,
@@ -519,10 +779,26 @@ Keep recommendations specific and data-driven. Use bullet points for clarity.`;
     };
   }
 
+  // Trimmed position group shape returned to the client so the UI can show
+  // that an analysis covered the combined strategy, not just one leg.
+  static summarizePositionGroupForClient(positionGroup) {
+    if (!positionGroup) return null;
+    return {
+      strategy_label: positionGroup.strategy_label,
+      detected_strategy: positionGroup.detected_strategy,
+      leg_count: positionGroup.leg_count,
+      underlying_symbol: positionGroup.underlying_symbol,
+      combined_pnl: positionGroup.combined_pnl,
+      is_completed: positionGroup.is_completed
+    };
+  }
+
   static buildSingleTradePrompt(tradeSummary, tradingProfile = null) {
     const trade = tradeSummary.trade;
     const enrichment = tradeSummary.enrichment;
     const visualContext = tradeSummary.visual_context;
+    const positionGroup = tradeSummary.position_group;
+    const qualityContext = tradeSummary.quality_context;
 
     let profileSection = '';
     if (tradingProfile) {
@@ -553,9 +829,47 @@ TRADER PROFILE:
       ? visualContext.images.map((image, index) => `- Image ${index + 1}: ${image.file_name || 'unnamed'} (${image.file_type || 'unknown type'}) at ${image.file_url}`).join('\n')
       : 'No attached trade images available.';
 
-    return `You are a professional trading coach and technical analyst. Analyze one specific trade to determine what went wrong, what worked, and what the trader should change next time. Base the analysis only on the available trade data, executions, enrichment, news, sector/company context, notes, chart links, and image attachment references below. If chart or image URLs are not directly viewable by your model, explicitly say you are using them as attachment references rather than visually inspecting them.
+    // Strategy-first framing (issue #339): when the trade belongs to a detected
+    // group, the combined strategy is the primary subject of the analysis. The
+    // snapshot leads the prompt and the leg record is demoted to a component,
+    // otherwise the model anchors on the leg's own P&L and analyzes it in
+    // isolation. The ungrouped prompt is unchanged.
+    let positionGroupSection = '';
+    let snapshotHeading = 'TRADE SNAPSHOT:';
+    let executionsHeading = 'EXECUTIONS:';
+    if (positionGroup) {
+      const strategyLabel = positionGroup.strategy_label || 'multi-leg option strategy';
+      const legLines = positionGroup.legs?.length
+        ? positionGroup.legs.map(leg => {
+            const optionDesc = leg.option_type
+              ? `${this.formatCurrencyValue(leg.strike_price)} ${leg.option_type}${leg.expiration_date ? ` exp ${leg.expiration_date}` : ''}`
+              : leg.symbol;
+            const exitDesc = leg.exit_price ? this.formatCurrencyValue(leg.exit_price) : 'open';
+            return `- ${leg.is_analyzed_leg ? '[THIS LEG] ' : ''}${leg.side || 'N/A'} ${leg.quantity || 'N/A'}x ${optionDesc}: entry ${this.formatCurrencyValue(leg.entry_price)} -> exit ${exitDesc}, leg P&L: ${this.formatCurrencyValue(leg.pnl)}`;
+          }).join('\n')
+        : 'Leg details unavailable.';
 
-${profileSection}TRADE SNAPSHOT:
+      positionGroupSection = `STRATEGY SNAPSHOT (PRIMARY SUBJECT):
+This is a detected ${strategyLabel} (${positionGroup.leg_count} legs) on ${positionGroup.underlying_symbol}${positionGroup.expiration_date ? `, expiring ${positionGroup.expiration_date}` : ''}. Analyze the COMBINED strategy as a single position — net credit/debit, strike structure, defined risk vs reward, and whether the structure fit the market view — rather than judging any leg in isolation. A losing leg inside a profitable structure is usually the planned hedge, not a mistake.
+- Combined net P&L (all legs): ${this.formatCurrencyValue(positionGroup.combined_pnl)}
+- Combined commissions/fees: ${this.formatCurrencyValue(positionGroup.combined_costs)}
+- Structure status: ${positionGroup.is_completed ? 'closed' : 'open'}
+Legs:
+${legLines}
+
+`;
+      snapshotHeading = 'ANALYZED LEG DETAIL (one component of the strategy above — do not judge it in isolation):';
+      executionsHeading = 'EXECUTIONS (for the analyzed leg):';
+    }
+
+    const sharedCaveat = 'Base the analysis only on the available trade data, executions, enrichment, news, sector/company context, notes, chart links, and image attachment references below. If chart or image URLs are not directly viewable by your model, explicitly say you are using them as attachment references rather than visually inspecting them.';
+    const intro = positionGroup
+      ? `You are a professional trading coach and technical analyst. Analyze one multi-leg option strategy as a single combined trade to determine what went wrong, what worked, and what the trader should change next time. ${sharedCaveat} The trade record below is one leg of the strategy; evaluate the whole structure described in the STRATEGY SNAPSHOT section as one combined trade.`
+      : `You are a professional trading coach and technical analyst. Analyze one specific trade to determine what went wrong, what worked, and what the trader should change next time. ${sharedCaveat}`;
+
+    return `${intro}
+
+${profileSection}${positionGroupSection}${snapshotHeading}
 - Symbol: ${trade.symbol}${trade.company_name ? ` (${trade.company_name})` : ''}
 - Sector: ${trade.sector || 'N/A'}
 - Side: ${trade.side || 'N/A'}
@@ -576,7 +890,7 @@ ${profileSection}TRADE SNAPSHOT:
 - Tags: ${Array.isArray(trade.tags) ? trade.tags.join(', ') : (trade.tags || 'N/A')}
 - Notes: ${trade.notes || 'No notes'}
 
-EXECUTIONS:
+${executionsHeading}
 ${executions}
 
 ENRICHMENT:
@@ -597,12 +911,22 @@ ${images}
 QUALITY METRICS:
 ${JSON.stringify(trade.quality_metrics || {}, null, 2)}
 
-Please structure the response with:
+QUALITY CONTEXT INCLUDED:
+The following labeled quality inputs were included in this AI request. Treat automated Setup Quality as market-data/enrichment driven, Playbook Assessment as checklist adherence, and Manual Grading Profile as user-scored criteria. If more than one exists, reference them separately rather than merging them into one score.
+${this.formatQualityContextForPrompt(qualityContext)}
+
+${positionGroup ? `Please structure the response with:
+1. **Verdict**: A concise diagnosis of why this strategy succeeded or underperformed — structure, strikes, timing — or the biggest risk if it is still open.
+2. **Structure Analysis**: Strike selection, spread width, net credit/debit versus maximum risk, defined risk-reward of the combined position, and expiration choice.
+3. **Technical & Timing**: Underlying trend/context at entry, exit timing, and how the combined position was managed.
+4. **News & Sector Context**: How the linked news sentiment/events and sector/company data may have affected the setup.
+5. **Process Mistakes**: Sizing, plan adherence, psychology, or timing issues — judged at the strategy level, not per leg.
+6. **What To Do Next Time**: 3-5 concrete improvements tied to this exact strategy.` : `Please structure the response with:
 1. **Verdict**: A concise diagnosis of the most likely reason this trade underperformed or the biggest risk if it is still open.
 2. **Technical Analysis**: Entry location, trend/context, stop/target placement, risk-reward, timing, MAE/MFE, and execution quality.
 3. **News & Sector Context**: How the linked news sentiment/events and sector/company data may have affected the setup.
 4. **Process Mistakes**: Specific rule, psychology, sizing, timing, or plan-adherence issues visible in the data.
-5. **What To Do Next Time**: 3-5 concrete improvements tied to this exact trade.
+5. **What To Do Next Time**: 3-5 concrete improvements tied to this exact trade.`}
 
 Be direct, data-driven, and specific. Do not give generic trading advice.`;
   }
@@ -666,7 +990,10 @@ Be direct, data-driven, and specific. Do not give generic trading advice.`;
     const aiSettings = await this.getAISettings(userId, options);
     tradeSummary.ai_metadata = {
       provider: aiSettings.provider || null,
-      model: aiSettings.modelName || null
+      model: aiSettings.modelName || null,
+      context_sources: isSingleTradeAnalysis
+        ? this.getQualityContextSources(tradeSummary.quality_context)
+        : []
     };
 
     // Build the analysis prompt
@@ -721,6 +1048,7 @@ Be direct, data-driven, and specific. Do not give generic trading advice.`;
         trade_id: tradeSummary.trade_id,
         symbol: tradeSummary.trade?.symbol,
         pnl: tradeSummary.trade?.pnl,
+        position_group: this.summarizePositionGroupForClient(tradeSummary.position_group),
         ai_metadata: tradeSummary.ai_metadata
       } : tradeSummary.metrics,
       ai_metadata: tradeSummary.ai_metadata,
@@ -809,9 +1137,13 @@ SINGLE TRADE CONTEXT:
 - P&L: ${tradeSummary.trade?.pnl || 'N/A'}
 - R-Multiple: ${tradeSummary.trade?.r_value ?? 'N/A'}
 - Strategy/Setup: ${tradeSummary.trade?.strategy || 'N/A'} / ${tradeSummary.trade?.setup || 'N/A'}
-- News sentiment: ${tradeSummary.enrichment?.news_sentiment || 'N/A'}
+${tradeSummary.position_group ? `- Multi-leg strategy: this trade is one leg of a ${tradeSummary.position_group.strategy_label || 'multi-leg option strategy'} (${tradeSummary.position_group.leg_count} legs) with combined net P&L ${this.formatCurrencyValue(tradeSummary.position_group.combined_pnl)}; treat the structure as one combined trade.
+` : ''}- News sentiment: ${tradeSummary.enrichment?.news_sentiment || 'N/A'}
 - Charts attached: ${tradeSummary.visual_context?.charts?.length || 0}
 - Images attached: ${tradeSummary.visual_context?.images?.length || 0}
+
+QUALITY CONTEXT INCLUDED:
+${this.formatQualityContextForPrompt(tradeSummary.quality_context)}
 
 CONVERSATION HISTORY:
 ${conversationHistory}
@@ -827,6 +1159,7 @@ TRADING CONTEXT:
 - Win Rate: ${tradeSummary.metrics.win_rate}%
 - Total Trades: ${tradeSummary.metrics.trade_count}
 - Profit Factor: ${tradeSummary.metrics.profit_factor}
+${tradeSummary.position_grouping?.enabled ? '- Position grouping is enabled: multi-leg option strategies are counted as single positions, so trade counts and win rate are per position, not per leg.' : ''}
 
 CONVERSATION HISTORY:
 ${conversationHistory}
@@ -921,6 +1254,7 @@ Please provide a helpful, specific response to the user's question. Reference th
             trade_id: storedSummary.trade_id,
             symbol: storedSummary.trade?.symbol,
             pnl: storedSummary.trade?.pnl,
+            position_group: this.summarizePositionGroupForClient(storedSummary.position_group),
             ai_metadata: storedSummary.ai_metadata || null
           }
         : storedSummary.metrics || {},
@@ -1010,6 +1344,7 @@ Please provide a helpful, specific response to the user's question. Reference th
       status: row.status,
       trade_id: row.trade_summary?.trade_id || tradeId,
       symbol: row.trade_summary?.trade?.symbol || trade.symbol,
+      position_group: this.summarizePositionGroupForClient(row.trade_summary?.position_group),
       ai_metadata: row.trade_summary?.ai_metadata || null,
       response_count: Array.isArray(row.responses) ? row.responses.length : 0,
       followup_count: row.followup_count,
@@ -1018,6 +1353,48 @@ Please provide a helpful, specific response to the user's question. Reference th
       updated_at: row.updated_at,
       responses: row.responses || []
     }));
+  }
+
+  static async deleteTradeAnalysis(userId, tradeId, analysisId) {
+    if (!tradeId || typeof tradeId !== 'string') {
+      throw new Error('Trade ID is required');
+    }
+    if (!analysisId || typeof analysisId !== 'string') {
+      throw new Error('Analysis ID is required');
+    }
+
+    const result = await db.query(
+      `DELETE FROM ai_sessions
+       WHERE id = $1
+         AND user_id = $2
+         AND filters_applied->>'analysisType' = 'single_trade'
+         AND filters_applied->>'tradeId' = $3
+       RETURNING id`,
+      [analysisId, userId, tradeId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error('Analysis not found or access denied');
+    }
+
+    return result.rows.length;
+  }
+
+  static async deleteTradeAnalyses(userId, tradeId) {
+    if (!tradeId || typeof tradeId !== 'string') {
+      throw new Error('Trade ID is required');
+    }
+
+    const result = await db.query(
+      `DELETE FROM ai_sessions
+       WHERE user_id = $1
+         AND filters_applied->>'analysisType' = 'single_trade'
+         AND filters_applied->>'tradeId' = $2
+       RETURNING id`,
+      [userId, tradeId]
+    );
+
+    return result.rows.length;
   }
 
   /**

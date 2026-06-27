@@ -79,6 +79,7 @@
                             @input="debouncedSearch"
                             type="text"
                             placeholder="Search CUSIP, ticker, or company..."
+                            aria-label="Search CUSIP mappings"
                             class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:text-white text-sm"
                         />
                     </div>
@@ -88,16 +89,16 @@
                         >
                             Source
                         </label>
-                        <select
+                        <BaseSelect
                             v-model="sourceFilter"
-                            @change="fetchMappings"
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:text-white text-sm"
-                        >
-                            <option value="">All Sources</option>
-                            <option value="finnhub">Finnhub (Global)</option>
-                            <option value="ai">AI Resolution</option>
-                            <option value="manual">Manual Entry</option>
-                        </select>
+                            @change="fetchMappings()"
+                            placeholder="All Sources"
+                            :options="[
+                                { value: 'finnhub', label: 'Finnhub (Global)' },
+                                { value: 'ai', label: 'AI Resolution' },
+                                { value: 'manual', label: 'Manual Entry' }
+                            ]"
+                        />
                     </div>
                     <div>
                         <label
@@ -105,15 +106,15 @@
                         >
                             Status
                         </label>
-                        <select
+                        <BaseSelect
                             v-model="verifiedFilter"
-                            @change="fetchMappings"
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:text-white text-sm"
-                        >
-                            <option value="">All Status</option>
-                            <option value="true">Verified</option>
-                            <option value="false">Unverified</option>
-                        </select>
+                            @change="fetchMappings()"
+                            placeholder="All Status"
+                            :options="[
+                                { value: 'true', label: 'Verified' },
+                                { value: 'false', label: 'Unverified' }
+                            ]"
+                        />
                     </div>
                     <div class="flex items-end">
                         <button
@@ -449,6 +450,7 @@ import {
 import { useAuthStore } from "@/stores/auth";
 import CusipMappingModal from "@/components/cusip/CusipMappingModal.vue";
 import UnmappedCusipsModal from "@/components/cusip/UnmappedCusipsModal.vue";
+import BaseSelect from "@/components/common/BaseSelect.vue";
 import { debounce } from "lodash-es";
 
 const router = useRouter();

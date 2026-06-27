@@ -28,84 +28,26 @@
     />
 
     <div class="space-y-8">
-      <section class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <div class="flex items-center gap-3 border-b border-gray-200 px-5 py-3 dark:border-gray-700">
-          <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-primary-50 ring-1 ring-primary-100 dark:bg-primary-900/30 dark:ring-primary-800/60">
-            <DocumentTextIcon class="h-4 w-4 text-primary-600 dark:text-primary-400" />
-          </div>
-          <div class="min-w-0 flex-1">
-            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">CSV import guide</h2>
-            <p class="text-xs text-gray-500 dark:text-gray-400">Pick your broker for export instructions, or stick with Auto-Detect.</p>
-          </div>
-        </div>
-
-        <div class="border-b border-gray-200 px-2 py-2 dark:border-gray-700">
-          <div class="-mx-2 flex gap-1 overflow-x-auto px-2 scrollbar-thin">
-            <button
-              v-for="brokerOption in popularBrokerOptions"
-              :key="brokerOption.value"
-              type="button"
-              class="whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition"
-              :class="selectedBroker === brokerOption.value
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-100'"
-              @click="selectQuickBroker(brokerOption.value)"
-            >
-              {{ brokerOption.label }}
-            </button>
-          </div>
-        </div>
-
-        <div class="grid gap-px bg-gray-200 dark:bg-gray-700 lg:grid-cols-[1.6fr_1fr]">
-          <div class="bg-white p-5 dark:bg-gray-800">
-            <div class="mb-4 flex items-baseline justify-between gap-3">
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ activeBrokerGuide.title }}</h3>
-              <span class="text-[11px] font-semibold uppercase tracking-wider text-primary-600 dark:text-primary-400">
-                {{ activeBrokerGuide.badge }}
-              </span>
-            </div>
-            <ol class="space-y-3.5">
-              <li
-                v-for="(step, index) in activeBrokerGuide.steps"
-                :key="step"
-                class="flex gap-3 text-sm leading-relaxed text-gray-700 dark:text-gray-300"
-              >
-                <span class="mt-0.5 w-6 flex-shrink-0 font-mono text-xs font-semibold tabular-nums text-primary-500 dark:text-primary-400">
-                  {{ String(index + 1).padStart(2, '0') }}
-                </span>
-                <span>{{ step }}</span>
-              </li>
-            </ol>
-          </div>
-
-          <div class="bg-gray-50 p-5 dark:bg-gray-900/40">
-            <div class="mb-2 flex items-center gap-2">
-              <ExclamationTriangleIcon class="h-4 w-4 flex-shrink-0 text-primary-500 dark:text-primary-400" />
-              <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Heads up</span>
-            </div>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-gray-400">
-              {{ activeBrokerGuide.warning }}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <!-- Import Form -->
+      <!-- Import Form (primary action, shown first) -->
       <div class="card">
         <div class="card-body">
           <form @submit.prevent="handleImport" class="space-y-6">
             <!-- File Upload Drop Zone -->
             <div>
               <div
-                class="flex justify-center px-6 pt-8 pb-8 border-2 border-dashed rounded-xl transition-colors"
+                class="flex justify-center px-6 pt-8 pb-8 border-2 border-dashed rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
                 :class="[
                   isAnalyzingFile ? 'border-primary-400 bg-primary-50/50 dark:bg-primary-900/10 cursor-wait' :
                   dragOver ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 cursor-pointer' : 'border-gray-300 dark:border-gray-600 hover:border-primary-400 dark:hover:border-primary-500 cursor-pointer'
                 ]"
+                tabindex="0"
+                role="button"
+                aria-label="Upload a broker CSV file"
                 @dragover.prevent="handleDragOver"
                 @dragleave.prevent="handleDragLeave"
                 @drop.prevent="handleDrop"
-                @click="!isAnalyzingFile && $refs.fileInput && $refs.fileInput.click()"
+                @keydown.prevent="handleDropzoneKeydown"
+                @click="!isAnalyzingFile && fileInput && fileInput.click()"
               >
                 <div v-if="isAnalyzingFile" class="space-y-3 text-center">
                   <div class="animate-spin mx-auto h-12 w-12 rounded-full border-4 border-primary-200 border-t-primary-600"></div>
@@ -152,79 +94,105 @@
 
             <div>
               <label for="broker" class="label">Broker Format</label>
-              <select id="broker" v-model="selectedBroker" required class="input">
-                <option value="auto">Auto-Detect (Recommended)</option>
-                <option disabled>--- Or select your broker ---</option>
-                <option value="generic">Generic CSV</option>
-                <option value="lightspeed">Lightspeed Trader</option>
-                <option value="schwab">Charles Schwab</option>
-                <option value="thinkorswim">ThinkorSwim</option>
-                <option value="ibkr">Interactive Brokers</option>
-                <option value="captrader">CapTrader</option>
-                <option value="webull">Webull</option>
-                <option value="etrade">E*TRADE</option>
-                <option value="firstrade">Firstrade (Alpha)</option>
-                <option value="papermoney">PaperMoney</option>
-                <option value="tradervue">TraderVue</option>
-                <option value="tradingview">TradingView</option>
-                <option value="avatrade">AvaTrade</option>
-                <option value="tradovate">Tradovate</option>
-                <option value="questrade">Questrade</option>
-                <option value="tradestation">TradeStation</option>
-                <option value="tastytrade">Tastytrade</option>
-                <optgroup v-if="customMappings.length > 0" label="Custom Importers">
-                  <option
-                    v-for="mapping in customMappings"
-                    :key="mapping.id"
-                    :value="`custom:${mapping.id}`"
-                  >
-                    {{ mapping.mapping_name }}
-                  </option>
-                </optgroup>
-              </select>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              <BaseSelect
+                v-model="selectedBroker"
+                noun="brokers"
+                :options="brokerFormatOptions"
+              />
+
+              <!-- Quick-pick chips (drive the same state as the dropdown) -->
+              <div class="mt-2 flex items-center gap-1.5 pb-1 h-scroll-fade">
+                <span class="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400">Quick pick:</span>
+                <button
+                  v-for="brokerOption in popularBrokerOptions"
+                  :key="brokerOption.value"
+                  type="button"
+                  class="flex-shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition"
+                  :class="selectedBroker === brokerOption.value
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-300 dark:hover:bg-gray-700'"
+                  @click="selectQuickBroker(brokerOption.value)"
+                >
+                  {{ brokerOption.label }}
+                </button>
+              </div>
+              <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
                 We'll automatically detect your broker from the CSV file. Select a specific broker only if auto-detection doesn't work.
               </p>
+            </div>
+
+            <!-- Contextual broker export guide: only appears once a broker is chosen -->
+            <div v-if="showBrokerGuide" class="rounded-xl border border-gray-200 bg-gray-50/60 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+              <div class="flex items-start gap-3">
+                <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-primary-50 ring-1 ring-primary-100 dark:bg-primary-900/30 dark:ring-primary-800/60">
+                  <DocumentTextIcon class="h-4 w-4 text-primary-600 dark:text-primary-400" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-baseline justify-between gap-3">
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ activeBrokerGuide.title }}</h3>
+                    <span class="text-[11px] font-semibold uppercase tracking-wider text-primary-600 dark:text-primary-400">
+                      {{ activeBrokerGuide.badge }}
+                    </span>
+                  </div>
+                  <ol class="mt-3 space-y-2">
+                    <li
+                      v-for="(step, index) in activeBrokerGuide.steps"
+                      :key="step"
+                      class="flex gap-2.5 text-sm leading-relaxed text-gray-700 dark:text-gray-300"
+                    >
+                      <span class="mt-0.5 w-5 flex-shrink-0 font-mono text-xs font-semibold tabular-nums text-primary-500 dark:text-primary-400">
+                        {{ index + 1 }}
+                      </span>
+                      <span>{{ step }}</span>
+                    </li>
+                  </ol>
+                  <div class="mt-3 flex items-start gap-2 rounded-lg bg-white/70 p-2.5 dark:bg-gray-800/60">
+                    <ExclamationTriangleIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-yellow-500 dark:text-yellow-400" />
+                    <p class="text-xs leading-relaxed text-gray-600 dark:text-gray-400">
+                      {{ activeBrokerGuide.warning }}
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- Account Selection (only shown if user has defined accounts) -->
             <div v-if="requiresAccountSelection">
               <label for="account" class="label">Trading Account</label>
-              <select id="account" v-model="selectedAccountId" class="input">
-                <option :value="null">Select account...</option>
-                <option v-for="account in accounts" :key="account.id" :value="account.id">
-                  {{ account.name }}{{ account.identifier ? ` (${redactAccountId(account.identifier)})` : '' }}{{ account.broker ? ` - ${formatBrokerName(account.broker)}` : '' }}
-                </option>
-                <option value="none">None (different broker/account)</option>
-              </select>
+              <BaseSelect id="account" v-model="selectedAccountId" :options="accountOptions" />
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Select a trading account to associate with this import, or choose "None" if importing from a different broker.
                 <router-link to="/accounts" class="text-primary-600 hover:text-primary-500">Manage accounts</router-link>
               </p>
             </div>
 
+            <div>
+              <label for="import-strategy" class="label">Strategy (optional)</label>
+              <BaseSelect
+                id="import-strategy"
+                v-model="selectedImportStrategy"
+                noun="strategies"
+                placeholder="Auto-detect from trade data"
+                :options="importStrategyOptions"
+              />
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                Leave unset to classify each trade automatically. Choose a strategy to apply it to every trade in this import.
+              </p>
+            </div>
+
             <div v-if="selectedFile" class="rounded-2xl border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-700 dark:bg-gray-900/50">
-              <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <p class="text-sm font-semibold text-gray-900 dark:text-white">Pre-import check</p>
-                  <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                    {{ fileReadinessMessage }}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="self-start text-sm font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400"
-                  @click="analyzeSelectedFile(selectedFile)"
-                >
-                  Re-check file
-                </button>
+              <div class="flex flex-col gap-1">
+                <p class="text-sm font-semibold text-gray-900 dark:text-white">Pre-import check</p>
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                  {{ fileReadinessMessage }}
+                </p>
               </div>
 
               <div v-if="isAnalyzingFile" class="mt-4 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-700 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-300">
                 Analyzing headers and estimating trade count...
               </div>
 
-              <div v-else class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div v-else class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
                   <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Estimated rows</p>
                   <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
@@ -284,19 +252,24 @@
               </div>
             </div>
 
-            <div class="flex justify-end">
-              <button
-                type="submit"
-                :disabled="!selectedFile || !selectedBroker || loading"
-                class="btn-primary inline-flex items-center"
-              >
-                <svg v-if="loading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span v-if="loading">Importing...</span>
-                <span v-else>{{ importButtonLabel }}</span>
-              </button>
+            <div>
+              <p v-if="accountBlockMessage" class="mb-2 text-right text-xs text-gray-500 dark:text-gray-400">
+                {{ accountBlockMessage }}
+              </p>
+              <div class="flex justify-end">
+                <button
+                  type="submit"
+                  :disabled="!canSubmit"
+                  class="btn-primary inline-flex items-center"
+                >
+                  <svg v-if="loading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span v-if="loading">Importing...</span>
+                  <span v-else>{{ importButtonLabel }}</span>
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -305,8 +278,8 @@
       <!-- Import History -->
       <div v-if="importHistory.length > 0" class="card">
         <div class="card-body">
-          <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center space-x-3">
+          <div class="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex flex-wrap items-center gap-3">
               <h3 class="heading-card">
                 Import History
                 <span v-if="pagination.total > 0" class="text-sm font-normal text-gray-500 dark:text-gray-400">
@@ -316,7 +289,7 @@
               <button
                 v-if="selectedImportIds.size > 0"
                 @click="bulkDeleteImports"
-                class="px-3 py-1 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 disabled:opacity-50"
+                class="px-3 py-1 bg-danger text-white text-sm rounded-md hover:bg-red-700 disabled:opacity-50"
                 :disabled="bulkDeleting"
               >
                 Delete Selected ({{ selectedImportIds.size }})
@@ -342,26 +315,26 @@
             <div
               v-for="importLog in importHistory"
               :key="importLog.id"
-              class="flex items-center justify-between p-3 border rounded-lg"
+              class="flex flex-col gap-3 p-3 border rounded-lg sm:flex-row sm:items-center sm:justify-between"
               :class="selectedImportIds.has(importLog.id) ? 'border-primary-300 dark:border-primary-600 bg-primary-50 dark:bg-primary-900/20' : 'border-gray-200 dark:border-gray-700'"
             >
-              <div class="flex items-center space-x-3">
+              <div class="flex items-center space-x-3 min-w-0">
                 <input
                   type="checkbox"
                   :checked="selectedImportIds.has(importLog.id)"
                   @change="toggleImportSelection(importLog.id)"
-                  class="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
+                  class="flex-shrink-0 rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
                 />
-                <div>
-                  <p class="font-medium text-gray-900 dark:text-white">{{ importLog.file_name }}</p>
+                <div class="min-w-0">
+                  <p class="truncate font-medium text-gray-900 dark:text-white">{{ importLog.file_name }}</p>
                   <p class="text-sm text-gray-500 dark:text-gray-400">
                     {{ formatDate(importLog.created_at) }} • {{ importLog.broker }}
                   </p>
                 </div>
               </div>
-              <div class="flex items-center space-x-3">
-                <div class="text-right">
-                  <div class="flex items-center space-x-2">
+              <div class="flex items-center justify-between space-x-3 sm:justify-end">
+                <div class="text-left sm:text-right">
+                  <div class="flex items-center space-x-2 sm:justify-end">
                     <span class="px-2 py-1 text-xs rounded-full" :class="getStatusClass(importLog.status)">
                       {{ getStatusText(importLog.status) }}
                     </span>
@@ -375,7 +348,7 @@
                 </div>
                 <button
                   @click="deleteImport(importLog.id)"
-                  class="text-red-600 hover:text-red-500 text-sm"
+                  class="flex-shrink-0 text-red-600 hover:text-red-500 text-sm"
                   :disabled="deleting"
                 >
                   Delete
@@ -946,6 +919,7 @@
                       v-model="logSearchQuery"
                       type="text"
                       placeholder="Search logs... (e.g. CURR, SLRX, duplicate, error)"
+                      aria-label="Search import logs"
                       class="input pl-10 pr-10"
                       @input="searchLogs"
                     />
@@ -1011,67 +985,71 @@
     />
 
     <!-- Delete Import Confirmation Modal -->
-    <div v-if="showDeleteModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-      <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white dark:bg-gray-800">
-        <div class="mt-3 text-center">
-          <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900">
-            <ExclamationTriangleIcon class="h-6 w-6 text-red-600 dark:text-red-400" />
-          </div>
-          <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white mt-4">
-            {{ bulkDeleteIds ? `Delete ${bulkDeleteIds.length} Imports` : 'Delete Import' }}
-          </h3>
-          <div class="mt-2 px-7 py-3">
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {{ bulkDeleteIds
-                ? `Are you sure you want to delete ${bulkDeleteIds.length} imports and all associated trades?`
-                : 'Are you sure you want to delete this import and all associated trades?' }}
+    <BaseModal
+      v-model="showDeleteModal"
+      :title="bulkDeleteIds ? `Delete ${bulkDeleteIds.length} Imports` : 'Delete Import'"
+      size="md"
+      :show-close="false"
+      @close="cancelDelete"
+    >
+      <div class="flex items-start gap-3">
+        <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/40">
+          <ExclamationTriangleIcon class="h-5 w-5 text-red-600 dark:text-red-400" />
+        </div>
+        <div class="min-w-0">
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            {{ bulkDeleteIds
+              ? `Are you sure you want to delete ${bulkDeleteIds.length} imports and all associated trades?`
+              : 'Are you sure you want to delete this import and all associated trades?' }}
+          </p>
+          <!-- Single delete details -->
+          <div v-if="deleteImportData && !bulkDeleteIds" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md">
+            <p class="text-sm font-medium text-gray-900 dark:text-white">{{ deleteImportData.file_name }}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {{ formatDate(deleteImportData.created_at) }}
             </p>
-            <!-- Single delete details -->
-            <div v-if="deleteImportData && !bulkDeleteIds" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md text-left">
-              <p class="text-sm font-medium text-gray-900 dark:text-white">{{ deleteImportData.file_name }}</p>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {{ formatDate(deleteImportData.created_at) }}
-              </p>
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ deleteImportData.trades_imported }} trades will be deleted
+            </p>
+          </div>
+          <!-- Bulk delete details -->
+          <div v-if="bulkDeleteIds" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md max-h-48 overflow-y-auto">
+            <div v-for="imp in bulkDeleteDetails" :key="imp.id" class="text-sm py-1 border-b border-gray-200 dark:border-gray-600 last:border-0">
+              <p class="font-medium text-gray-900 dark:text-white">{{ imp.file_name }}</p>
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ deleteImportData.trades_imported }} trades will be deleted
+                {{ formatDate(imp.created_at) }} - {{ imp.trades_imported }} trades
               </p>
             </div>
-            <!-- Bulk delete details -->
-            <div v-if="bulkDeleteIds" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md text-left max-h-48 overflow-y-auto">
-              <div v-for="imp in bulkDeleteDetails" :key="imp.id" class="text-sm py-1 border-b border-gray-200 dark:border-gray-600 last:border-0">
-                <p class="font-medium text-gray-900 dark:text-white">{{ imp.file_name }}</p>
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ formatDate(imp.created_at) }} - {{ imp.trades_imported }} trades
-                </p>
-              </div>
-              <p class="text-sm font-medium text-gray-900 dark:text-white mt-2 pt-2 border-t border-gray-300 dark:border-gray-500">
-                Total: {{ bulkDeleteTotalTrades }} trades will be deleted
-              </p>
-            </div>
-            <p class="text-xs text-red-600 dark:text-red-400 mt-2 font-medium">
-              This action cannot be undone.
+            <p class="text-sm font-medium text-gray-900 dark:text-white mt-2 pt-2 border-t border-gray-300 dark:border-gray-500">
+              Total: {{ bulkDeleteTotalTrades }} trades will be deleted
             </p>
           </div>
-          <div class="flex gap-3 justify-center mt-4">
-            <button
-              @click="cancelDelete"
-              class="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 text-base font-medium rounded-md shadow-sm hover:bg-gray-400 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-300"
-              :disabled="deleting || bulkDeleting"
-            >
-              Cancel
-            </button>
-            <button
-              @click="confirmDelete"
-              class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
-              :disabled="deleting || bulkDeleting"
-            >
-              <span v-if="deleting || bulkDeleting">Deleting...</span>
-              <span v-else>Delete</span>
-            </button>
-          </div>
+          <p class="text-xs text-red-600 dark:text-red-400 mt-2 font-medium">
+            This action cannot be undone.
+          </p>
         </div>
       </div>
-    </div>
+
+      <template #footer>
+        <button
+          type="button"
+          class="btn-secondary"
+          @click="cancelDelete"
+          :disabled="deleting || bulkDeleting"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn-danger"
+          @click="confirmDelete"
+          :disabled="deleting || bulkDeleting"
+        >
+          <span v-if="deleting || bulkDeleting">Deleting...</span>
+          <span v-else>Delete</span>
+        </button>
+      </template>
+    </BaseModal>
   </div>
 
   <!-- CSV Column Mapping Modal -->
@@ -1088,114 +1066,109 @@
     />
 
   <!-- Currency Pro Feature Modal -->
-  <div v-if="showCurrencyProModal" class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-      <!-- Background overlay -->
-      <div class="fixed inset-0 bg-gray-500 dark:bg-gray-900 bg-opacity-75 dark:bg-opacity-75 transition-opacity" aria-hidden="true" @click="showCurrencyProModal = false"></div>
+  <BaseModal
+    v-model="showCurrencyProModal"
+    title="Pro Feature Required"
+    size="lg"
+    :show-close="false"
+  >
+    <div class="flex flex-col items-center text-center">
+      <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/40">
+        <svg class="h-6 w-6 text-primary-600 dark:text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+        {{ currencyProMessage }}
+      </p>
+    </div>
 
-      <!-- Modal panel -->
-      <div class="inline-block align-bottom bg-white dark:bg-gray-800 rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
-        <div>
-          <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-primary-100 dark:bg-primary-900">
-            <svg class="h-6 w-6 text-primary-600 dark:text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <div class="mt-3 text-center sm:mt-5">
-            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white" id="modal-title">
-              Pro Feature Required
-            </h3>
-            <div class="mt-2">
-              <p class="text-sm text-gray-500 dark:text-gray-400">
-                {{ currencyProMessage }}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div class="mt-5 sm:mt-6 space-y-3">
-          <!-- Trial Button - show if user hasn't used trial yet -->
-          <button
-            v-if="!hasUsedTrial && (!trialInfo || !trialInfo.active)"
-            type="button"
-            :disabled="startingTrial"
-            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            @click="startTrial"
-          >
-            <span v-if="startingTrial" class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
-            Start 14-Day Free Trial
-          </button>
+    <div class="mt-6 space-y-3">
+      <!-- Trial Button - show if user hasn't used trial yet -->
+      <button
+        v-if="!hasUsedTrial && (!trialInfo || !trialInfo.active)"
+        type="button"
+        :disabled="startingTrial"
+        class="btn w-full justify-center bg-green-600 text-white hover:bg-green-700 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        @click="startTrial"
+      >
+        <span v-if="startingTrial" class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
+        Start 14-Day Free Trial
+      </button>
 
-          <div class="sm:grid sm:grid-cols-2 sm:gap-3">
-            <router-link
-              to="/pricing"
-              class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:text-sm"
-              @click="showCurrencyProModal = false"
-            >
-              View Pricing
-            </router-link>
-            <button
-              type="button"
-              class="mt-3 sm:mt-0 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 shadow-sm px-4 py-2 bg-white dark:bg-gray-700 text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:text-sm"
-              @click="showCurrencyProModal = false"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <router-link
+          to="/pricing"
+          class="btn-primary w-full justify-center"
+          @click="showCurrencyProModal = false"
+        >
+          View Pricing
+        </router-link>
+        <button
+          type="button"
+          class="btn-secondary w-full justify-center"
+          @click="showCurrencyProModal = false"
+        >
+          Cancel
+        </button>
       </div>
     </div>
-  </div>
+  </BaseModal>
 
   <!-- Delete Importer Confirmation Modal -->
-  <Teleport to="body">
-    <div v-if="showDeleteMappingModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-      <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white dark:bg-gray-800">
-        <div class="mt-3 text-center">
-          <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900">
-            <ExclamationTriangleIcon class="h-6 w-6 text-red-600 dark:text-red-400" />
-          </div>
-          <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white mt-4">
-            Delete Custom Importer
-          </h3>
-          <div class="mt-2 px-7 py-3">
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              Are you sure you want to delete this custom importer?
-            </p>
-            <div v-if="mappingToDelete" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md text-left">
-              <p class="text-sm font-medium text-gray-900 dark:text-white">{{ mappingToDelete.mapping_name }}</p>
-              <p v-if="mappingToDelete.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {{ mappingToDelete.description }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                <span v-if="mappingToDelete.use_count > 0">Used {{ mappingToDelete.use_count }} time{{ mappingToDelete.use_count !== 1 ? 's' : '' }}</span>
-                <span v-else>Never used</span>
-              </p>
-            </div>
-            <p class="text-xs text-red-600 dark:text-red-400 mt-2 font-medium">
-              This action cannot be undone.
-            </p>
-          </div>
-          <div class="flex gap-3 justify-center mt-4">
-            <button
-              @click="cancelDeleteMapping"
-              class="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 text-base font-medium rounded-md shadow-sm hover:bg-gray-400 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-300"
-              :disabled="deletingMappingId !== null"
-            >
-              Cancel
-            </button>
-            <button
-              @click="deleteMapping"
-              class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
-              :disabled="deletingMappingId !== null"
-            >
-              <span v-if="deletingMappingId !== null">Deleting...</span>
-              <span v-else>Delete</span>
-            </button>
-          </div>
+  <BaseModal
+    v-model="showDeleteMappingModal"
+    title="Delete Custom Importer"
+    size="md"
+    :show-close="false"
+    @close="cancelDeleteMapping"
+  >
+    <div class="flex items-start gap-3">
+      <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/40">
+        <ExclamationTriangleIcon class="h-5 w-5 text-red-600 dark:text-red-400" />
+      </div>
+      <div class="min-w-0">
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          Are you sure you want to delete this custom importer?
+        </p>
+        <div v-if="mappingToDelete" class="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-md">
+          <p class="text-sm font-medium text-gray-900 dark:text-white">{{ mappingToDelete.mapping_name }}</p>
+          <p v-if="mappingToDelete.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ mappingToDelete.description }}
+          </p>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <span v-if="mappingToDelete.use_count > 0">Used {{ mappingToDelete.use_count }} time{{ mappingToDelete.use_count !== 1 ? 's' : '' }}</span>
+            <span v-else>Never used</span>
+          </p>
         </div>
+        <p class="text-xs text-red-600 dark:text-red-400 mt-2 font-medium">
+          This action cannot be undone.
+        </p>
       </div>
     </div>
 
+    <template #footer>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="cancelDeleteMapping"
+        :disabled="deletingMappingId !== null"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="btn-danger"
+        @click="deleteMapping"
+        :disabled="deletingMappingId !== null"
+      >
+        <span v-if="deletingMappingId !== null">Deleting...</span>
+        <span v-else>Delete</span>
+      </button>
+    </template>
+  </BaseModal>
+
+  <Teleport to="body">
     <!-- Broker Mismatch Modal -->
     <BrokerMismatchModal
       v-if="showBrokerMismatchModal"
@@ -1218,6 +1191,7 @@
       :duplicates-skipped="importResultsData.duplicatesSkipped"
       :diagnostics="importResultsData.diagnostics"
       :failed-trades="importResultsData.failedTrades"
+      :manual-review-items="importResultsData.manualReviewItems"
       :achievements="importResultsData.achievements"
       :selected-broker="selectedBroker"
       :file-name="selectedFile?.name || ''"
@@ -1227,8 +1201,19 @@
       @close="handleImportResultsClose"
       @load-demo-data="handleLoadDemoData"
       @support-clicked="handleImportSupportClicked"
+      @review-manual-items="openImportManualReview"
       @view-analytics="handleImportResultsViewAnalytics"
       @view-trades="handleImportResultsViewTrades"
+    />
+
+    <ManualTradeReviewModal
+      v-if="showManualReviewModal"
+      :is-open="showManualReviewModal"
+      :items="manualReviewItems"
+      :loading="manualReviewLoading"
+      :error="manualReviewError"
+      @close="showManualReviewModal = false"
+      @submit="handleManualReviewSubmit"
     />
   </Teleport>
 </template>
@@ -1256,8 +1241,13 @@ const AllCusipMappingsModal = defineAsyncComponent(() => import('@/components/cu
 const CSVColumnMappingModal = defineAsyncComponent(() => import('@/components/import/CSVColumnMappingModal.vue'))
 const BrokerMismatchModal = defineAsyncComponent(() => import('@/components/import/BrokerMismatchModal.vue'))
 const ImportResultsModal = defineAsyncComponent(() => import('@/components/import/ImportResultsModal.vue'))
+const ManualTradeReviewModal = defineAsyncComponent(() => import('@/components/import/ManualTradeReviewModal.vue'))
 import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
+import BaseModal from '@/components/common/BaseModal.vue'
 import { usePriceAlertNotifications } from '@/composables/usePriceAlertNotifications'
+import { useStrategyOrder } from '@/composables/useStrategyOrder'
+import { parseCSVHeaders, parseCSVSampleRows } from '@/utils/csvImportParse'
 
 const tradesStore = useTradesStore()
 const authStore = useAuthStore()
@@ -1292,6 +1282,9 @@ const startingTrial = ref(false)
 const accounts = ref([])
 const requiresAccountSelection = ref(false)
 const selectedAccountId = ref(null)
+const selectedImportStrategy = ref('')
+const importStrategiesList = ref([])
+const { orderNames: orderImportStrategyNames, refresh: refreshStrategyOrder } = useStrategyOrder()
 const currencyProMessage = ref('')
 const fileInput = ref(null)
 const selectAllCheckbox = ref(null)
@@ -1358,6 +1351,43 @@ const csvHeaders = ref([])
 const csvSampleRows = ref({})
 const currentMappingFile = ref(null)
 const customMappings = ref([])
+
+// Grouped options for the Broker Format dropdown: auto-detect on its own,
+// then the supported brokers, then any user-defined custom importers.
+const brokerFormatOptions = computed(() => {
+  const groups = [
+    { label: null, options: [{ value: 'auto', label: 'Auto-Detect (Recommended)' }] },
+    {
+      label: 'Or select your broker',
+      options: [
+        { value: 'generic', label: 'Generic CSV' },
+        { value: 'lightspeed', label: 'Lightspeed Trader' },
+        { value: 'schwab', label: 'Charles Schwab' },
+        { value: 'thinkorswim', label: 'ThinkorSwim' },
+        { value: 'ibkr', label: 'Interactive Brokers' },
+        { value: 'captrader', label: 'CapTrader' },
+        { value: 'webull', label: 'Webull' },
+        { value: 'etrade', label: 'E*TRADE' },
+        { value: 'firstrade', label: 'Firstrade (Alpha)' },
+        { value: 'papermoney', label: 'PaperMoney' },
+        { value: 'tradervue', label: 'TraderVue' },
+        { value: 'tradingview', label: 'TradingView' },
+        { value: 'avatrade', label: 'AvaTrade' },
+        { value: 'tradovate', label: 'Tradovate' },
+        { value: 'questrade', label: 'Questrade' },
+        { value: 'tradestation', label: 'TradeStation' },
+        { value: 'tastytrade', label: 'Tastytrade' }
+      ]
+    }
+  ]
+  if (customMappings.value.length > 0) {
+    groups.push({
+      label: 'Custom Importers',
+      options: customMappings.value.map(m => ({ value: `custom:${m.id}`, label: m.mapping_name }))
+    })
+  }
+  return groups
+})
 const showCustomMappings = ref(false)
 const showCusipManagement = ref(false)
 const deletingMappingId = ref(null)
@@ -1394,8 +1424,13 @@ const importResultsData = ref({
   duplicatesSkipped: 0,
   diagnostics: null,
   failedTrades: [],
+  manualReviewItems: [],
   achievements: []
 })
+const showManualReviewModal = ref(false)
+const manualReviewItems = ref([])
+const manualReviewLoading = ref(false)
+const manualReviewError = ref('')
 const activeImportStartedAt = ref(null)
 let activeFileAnalysisId = 0
 
@@ -1566,6 +1601,16 @@ const selectedBrokerLabel = computed(() => {
 
 const displayedHeaderPreview = computed(() => fileAnalysis.value.headers.slice(0, 6))
 
+// The export guide is contextual, not always-on. It surfaces when it actually
+// helps: when the user has picked a specific broker (auto is the default and
+// needs no guide), or when an uploaded file could not be recognized and the
+// user will likely need mapping help.
+const showBrokerGuide = computed(() => {
+  if (selectedBroker.value && selectedBroker.value !== 'auto') return true
+  if (selectedFile.value && !isAnalyzingFile.value && !fileAnalysis.value.formatDetected) return true
+  return false
+})
+
 const brokerRecommendation = computed(() => {
   if (!selectedFile.value) {
     return 'Upload a file to see guidance.'
@@ -1602,6 +1647,17 @@ const accountReadinessMessage = computed(() => {
   return 'Pick an account before starting import.'
 })
 
+const accountOptions = computed(() => {
+  const opts = [{ value: null, label: 'Select account...' }]
+  for (const account of accounts.value) {
+    const identifier = account.identifier ? ` (${redactAccountId(account.identifier)})` : ''
+    const broker = account.broker ? ` - ${formatBrokerName(account.broker)}` : ''
+    opts.push({ value: account.id, label: `${account.name}${identifier}${broker}` })
+  }
+  opts.push({ value: 'none', label: 'None (different broker/account)' })
+  return opts
+})
+
 const fileReadinessMessage = computed(() => {
   if (!selectedFile.value) return 'Upload a CSV file to start.'
   if (isAnalyzingFile.value) return 'Analyzing your file before import.'
@@ -1610,12 +1666,53 @@ const fileReadinessMessage = computed(() => {
   return `This file looks import-ready${fileAnalysis.value.detectedBroker ? ` for ${formatBrokerName(fileAnalysis.value.detectedBroker)}` : ''}.`
 })
 
+const importStrategyOptions = computed(() =>
+  orderImportStrategyNames(importStrategiesList.value).map((strategy) => ({
+    value: strategy,
+    label: strategy.replace(/_/g, ' ')
+  }))
+)
+
+function resolveImportStrategyParam() {
+  const value = selectedImportStrategy.value?.trim()
+  return value || null
+}
+
+async function fetchImportStrategies() {
+  try {
+    const response = await api.get('/trades/strategies')
+    importStrategiesList.value = response.data?.strategies || []
+  } catch (err) {
+    console.warn('[IMPORT] Failed to load strategies for import:', err?.message)
+    importStrategiesList.value = []
+  }
+}
+
 const importButtonLabel = computed(() => {
   if (fileAnalysis.value.rowCount && fileAnalysis.value.rowCount > 0) {
     return `Import ~${fileAnalysis.value.rowCount.toLocaleString()} Trades`
   }
 
   return 'Import Trades'
+})
+
+// Single source of truth for whether the submit button can be pressed.
+// The account requirement is enforced here (in the button) instead of only
+// after a click, so users see the blocker before attempting the import.
+const canSubmit = computed(() =>
+  !!selectedFile.value &&
+  !!selectedBroker.value &&
+  !loading.value &&
+  !(requiresAccountSelection.value && selectedAccountId.value === null)
+)
+
+// Shown under the button when an account is required but not yet picked,
+// so the disabled state always has an explanation.
+const accountBlockMessage = computed(() => {
+  if (requiresAccountSelection.value && selectedAccountId.value === null) {
+    return 'Select a trading account (or choose "None") to enable import.'
+  }
+  return ''
 })
 
 function runWhenIdle(callback, timeout = 1500) {
@@ -1736,6 +1833,16 @@ async function handleDrop(event) {
   }
 }
 
+// Keyboard support for the dropzone: a click-equivalent for users who can't
+// (or prefer not to) use a mouse. Enter and Space both open the file picker.
+function handleDropzoneKeydown(event) {
+  if (isAnalyzingFile.value) return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    fileInput.value?.click()
+  }
+}
+
 function getStatusClass(status) {
   switch (status) {
     case 'completed':
@@ -1773,128 +1880,6 @@ async function countCSVRows(file) {
         // Subtract 1 for header row
         const rowCount = Math.max(0, lines.length - 1)
         resolve(rowCount)
-      } catch (error) {
-        reject(error)
-      }
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsText(file)
-  })
-}
-
-// Parse CSV headers from file
-async function parseCSVSampleRows(file, headers, count = 2) {
-  if (!file || !headers || headers.length === 0) return {}
-  return new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const text = e.target.result
-        const lines = text.split('\n')
-
-        let headerLineIdx = -1
-        for (let i = 0; i < Math.min(15, lines.length); i++) {
-          const line = lines[i].trim()
-          if (!line || !line.includes(',')) continue
-          const lower = line.toLowerCase()
-          if ((lower.includes('date') && lower.includes('time') && lower.includes('type')) ||
-              (lower.includes('symbol') && (lower.includes('quantity') || lower.includes('qty') || lower.includes('price'))) ||
-              (lower.includes('action') && lower.includes('description')) ||
-              (lower.includes('trade number') || lower.includes('order id'))) {
-            headerLineIdx = i
-            break
-          }
-          if (headerLineIdx === -1) headerLineIdx = i
-        }
-
-        if (headerLineIdx === -1) {
-          resolve({})
-          return
-        }
-
-        const delimiters = [',', ';', '\t', '|']
-        let delimiter = ','
-        for (const d of delimiters) {
-          if (lines[headerLineIdx].split(d).length > 1) {
-            delimiter = d
-            break
-          }
-        }
-
-        const samples = {}
-        headers.forEach(h => { samples[h] = [] })
-        let collected = 0
-        for (let i = headerLineIdx + 1; i < lines.length && collected < count; i++) {
-          const line = lines[i].trim()
-          if (!line) continue
-          const cols = line.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''))
-          headers.forEach((h, idx) => {
-            if (cols[idx] !== undefined) samples[h].push(cols[idx])
-          })
-          collected++
-        }
-        resolve(samples)
-      } catch {
-        resolve({})
-      }
-    }
-    reader.onerror = () => resolve({})
-    reader.readAsText(file)
-  })
-}
-
-async function parseCSVHeaders(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const text = e.target.result
-        const lines = text.split('\n')
-
-        // Find the header line - prefer lines that look like actual column headers
-        // (e.g., containing "date", "time", "type") over title/section rows
-        // This handles ThinkorSwim CSVs that start with "Account Statement for..."
-        let headerLine = ''
-        let fallbackLine = ''
-        for (let i = 0; i < Math.min(15, lines.length); i++) {
-          const line = lines[i].trim()
-          if (!line || !line.includes(',')) continue
-          const lower = line.toLowerCase()
-          // Check if this looks like a real header row with column names
-          if ((lower.includes('date') && lower.includes('time') && lower.includes('type')) ||
-              (lower.includes('symbol') && (lower.includes('quantity') || lower.includes('qty') || lower.includes('price'))) ||
-              (lower.includes('action') && lower.includes('description')) ||
-              (lower.includes('trade number') || lower.includes('order id'))) {
-            headerLine = line
-            break
-          }
-          // Keep the first non-empty line as a fallback
-          if (!fallbackLine) {
-            fallbackLine = line
-          }
-        }
-        if (!headerLine) {
-          headerLine = fallbackLine
-        }
-
-        if (!headerLine) {
-          resolve([])
-          return
-        }
-
-        // Try different delimiters
-        let headers = []
-        const delimiters = [',', ';', '\t', '|']
-
-        for (const delimiter of delimiters) {
-          const cols = headerLine.split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, ''))
-          if (cols.length > 1) {
-            headers = cols
-            break
-          }
-        }
-
-        resolve(headers.filter(h => h))
       } catch (error) {
         reject(error)
       }
@@ -2001,6 +1986,13 @@ function detectBrokerFromHeaders(headers) {
     return 'tradovate'
   }
 
+  // NinjaTrader grid export (semicolon-delimited, European decimals in price)
+  if (headersStr.includes('instrument') && headersStr.includes('action') &&
+      headersStr.includes('quantity') && headersStr.includes('price') &&
+      (headersStr.includes('e/x') || headersStr.includes('order id'))) {
+    return 'generic'
+  }
+
   // Questrade detection
   if (headersStr.includes('fill qty') && headersStr.includes('fill price') &&
       headersStr.includes('exec time') && headersStr.includes('option') &&
@@ -2024,7 +2016,9 @@ function detectBrokerFromHeaders(headers) {
 
   // Generic CSV detection - check if it has basic required fields
   // Include common non-English equivalents for broader detection
-  const hasSymbol = lowerHeaders.some(h => h.includes('symbol') || h.includes('ticker') || h.includes('stock'))
+  const hasSymbol = lowerHeaders.some(h =>
+    h.includes('symbol') || h.includes('ticker') || h.includes('stock') || h === 'instrument'
+  )
   const hasSide = lowerHeaders.some(h => h.includes('side') || h.includes('direction') || h.includes('type') || h.includes('action') ||
     h.includes('seite') || h.includes('côté') || h.includes('lado'))
   const hasQuantity = lowerHeaders.some(h => h.includes('quantity') || h.includes('qty') || h.includes('shares') || h.includes('size') ||
@@ -2271,7 +2265,13 @@ async function handleImport() {
     }
 
     importStage.value = `Uploading and processing${tradeCount ? ` ~${tradeCount} trades` : ''}...`
-    const result = await tradesStore.importTrades(selectedFile.value, broker, mappingId, accountIdToSend)
+    const result = await tradesStore.importTrades(
+      selectedFile.value,
+      broker,
+      mappingId,
+      accountIdToSend,
+      resolveImportStrategyParam()
+    )
     console.log('Import result:', result)
     importStage.value = 'Processing trades...'
     showSuccess('Import Started', `Import has been queued. Import ID: ${result.importId}`)
@@ -2279,7 +2279,8 @@ async function handleImport() {
       broker,
       mapping_id: mappingId,
       import_id: result.importId,
-      estimated_rows: tradeCount
+      estimated_rows: tradeCount,
+      import_strategy: resolveImportStrategyParam() || 'auto'
     })
 
     // Save broker preference to localStorage
@@ -2425,7 +2426,13 @@ async function handleKeepBrokerSelected(selectedBrokerValue) {
       accountIdToSend = selectedAccountId.value
     }
 
-    const result = await tradesStore.importTrades(selectedFile.value, broker, mappingId, accountIdToSend)
+    const result = await tradesStore.importTrades(
+      selectedFile.value,
+      broker,
+      mappingId,
+      accountIdToSend,
+      resolveImportStrategyParam()
+    )
     console.log('Import result:', result)
     importStage.value = 'Processing trades...'
     showSuccess('Import Started', `Import has been queued. Import ID: ${result.importId}`)
@@ -2433,6 +2440,7 @@ async function handleKeepBrokerSelected(selectedBrokerValue) {
       broker,
       mapping_id: mappingId,
       import_id: result.importId,
+      import_strategy: resolveImportStrategyParam() || 'auto',
       path: 'broker_mismatch_keep_selected'
     })
 
@@ -2476,8 +2484,49 @@ function handleImportResultsClose() {
     duplicatesSkipped: 0,
     diagnostics: null,
     failedTrades: [],
+    manualReviewItems: [],
     achievements: []
   }
+}
+
+async function handleManualReviewSubmit(decisions) {
+  manualReviewLoading.value = true
+  manualReviewError.value = ''
+
+  try {
+    const response = await api.post('/trades/import/manual-review', { decisions })
+    const result = response.data || {}
+
+    if (result.failed > 0) {
+      manualReviewError.value = `Saved ${result.imported || 0} trade(s), but ${result.failed} decision(s) failed.`
+      return
+    }
+
+    showManualReviewModal.value = false
+    manualReviewItems.value = []
+
+    if ((result.imported || 0) > 0) {
+      await tradesStore.fetchTrades()
+      await tradesStore.fetchAnalytics()
+    }
+
+    const duplicateText = result.duplicates > 0 ? `, ${result.duplicates} duplicate(s) skipped` : ''
+    showSuccess('Review Saved', `${result.imported || 0} trade(s) imported, ${result.ignored || 0} ignored${duplicateText}.`)
+  } catch (err) {
+    manualReviewError.value = err.response?.data?.error || 'Failed to save review decisions'
+    showError('Review Failed', manualReviewError.value)
+  } finally {
+    manualReviewLoading.value = false
+  }
+}
+
+function openImportManualReview() {
+  const items = importResultsData.value.manualReviewItems || []
+  if (items.length === 0) return
+
+  manualReviewItems.value = items
+  manualReviewError.value = ''
+  showManualReviewModal.value = true
 }
 
 async function handleImportResultsViewAnalytics() {
@@ -3130,6 +3179,11 @@ function pollImportStatus(importId) {
         const tradesImported = importLog?.trades_imported || 0
         const duplicatesSkipped = errorDetails.duplicates || 0
         const failedTrades = errorDetails.failedTrades || []
+        const manualReviewItemsForImport = Array.isArray(errorDetails.manual_review_items)
+          ? errorDetails.manual_review_items
+          : (Array.isArray(errorDetails.manualReviewItems)
+              ? errorDetails.manualReviewItems
+              : (Array.isArray(diagnostics?.manual_review_items) ? diagnostics.manual_review_items : []))
 
         // Evaluate the demo-CTA feature only when the user is actually about to
         // see the zero-trades state. This fires the GrowthBook exposure event
@@ -3141,16 +3195,23 @@ function pollImportStatus(importId) {
         }
 
         // Show results modal if we have diagnostics or notable stats
-        if (diagnostics || tradesImported > 0 || duplicatesSkipped > 0 || failedTrades.length > 0) {
+        if (diagnostics || tradesImported > 0 || duplicatesSkipped > 0 || failedTrades.length > 0 || manualReviewItemsForImport.length > 0) {
           importResultsData.value = {
             importId,
             tradesImported,
             duplicatesSkipped,
             diagnostics,
             failedTrades,
+            manualReviewItems: manualReviewItemsForImport,
             achievements: []
           }
           showImportResultsModal.value = true
+        }
+
+        if (manualReviewItemsForImport.length > 0) {
+          manualReviewItems.value = manualReviewItemsForImport
+          manualReviewError.value = ''
+          showManualReviewModal.value = true
         }
 
         // Show actionable help when 0 trades imported
@@ -3384,7 +3445,13 @@ async function handleMappingSaved(mapping) {
   try {
     // Import with the mapping ID (convert "none" to null)
     const accountIdToSend = selectedAccountId.value === 'none' ? null : selectedAccountId.value
-    const result = await tradesStore.importTrades(currentMappingFile.value, 'generic', mapping.id, accountIdToSend)
+    const result = await tradesStore.importTrades(
+      currentMappingFile.value,
+      'generic',
+      mapping.id,
+      accountIdToSend,
+      resolveImportStrategyParam()
+    )
     console.log('Import result:', result)
     importStage.value = 'Processing trades...'
     showSuccess('Import Started', `Import has been queued. Import ID: ${result.importId}`)
@@ -3508,6 +3575,9 @@ onMounted(() => {
     onboarding_step: authStore.onboardingStep || null,
     has_existing_imports: importHistory.value.length > 0
   })
+
+  refreshStrategyOrder()
+  runWhenIdle(() => fetchImportStrategies())
 
   // Load saved broker preference
   const savedBroker = localStorage.getItem('lastSelectedBroker')

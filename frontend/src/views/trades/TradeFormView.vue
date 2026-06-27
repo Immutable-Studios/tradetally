@@ -84,21 +84,19 @@
 
             <div v-if="!hasGroupedExecutions">
               <label for="side" class="label">Side *</label>
-              <select id="side" v-model="form.side" required class="input">
-                <option value="">Select side</option>
-                <option value="long">Long</option>
-                <option value="short">Short</option>
-              </select>
+              <BaseSelect
+                v-model="form.side"
+                placeholder="Select side"
+                :options="[{ value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }]"
+              />
             </div>
 
             <div>
               <label for="instrumentType" class="label">Instrument Type *</label>
-              <select id="instrumentType" v-model="form.instrumentType" required class="input">
-                <option value="stock">Stock</option>
-                <option value="option">Option</option>
-                <option value="future">Future</option>
-                <option value="crypto">Crypto</option>
-              </select>
+              <BaseSelect
+                v-model="form.instrumentType"
+                :options="[{ value: 'stock', label: 'Stock' }, { value: 'option', label: 'Option' }, { value: 'future', label: 'Future' }, { value: 'crypto', label: 'Crypto' }]"
+              />
             </div>
           </div>
 
@@ -204,15 +202,10 @@
             <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">
               Manually specify which target was hit first (for R-Multiple analysis)
             </p>
-            <select
-              id="manualTargetHitFirst"
+            <BaseSelect
               v-model="form.manualTargetHitFirst"
-              class="input"
-            >
-              <option :value="null">-- Auto-detect (requires API) --</option>
-              <option value="take_profit">Take Profit Hit First</option>
-              <option value="stop_loss">Stop Loss Hit First</option>
-            </select>
+              :options="[{ value: null, label: '-- Auto-detect (requires API) --' }, { value: 'take_profit', label: 'Take Profit Hit First' }, { value: 'stop_loss', label: 'Stop Loss Hit First' }]"
+            />
           </div>
 
           <!-- Info message when fields are hidden -->
@@ -299,16 +292,11 @@
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label :for="`exec-side-${index}`" class="label">Side *</label>
-                    <select
-                      :id="`exec-side-${index}`"
+                    <BaseSelect
                       v-model="execution.side"
-                      required
-                      class="input"
-                    >
-                      <option value="">Select</option>
-                      <option value="long">Long</option>
-                      <option value="short">Short</option>
-                    </select>
+                      placeholder="Select"
+                      :options="[{ value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }]"
+                    />
                   </div>
 
                   <div>
@@ -529,16 +517,11 @@
 
                 <div>
                   <label :for="`exec-action-${index}`" class="label">Action *</label>
-                  <select
-                    :id="`exec-action-${index}`"
+                  <BaseSelect
                     v-model="execution.action"
-                    required
-                    class="input"
-                  >
-                    <option value="">Select</option>
-                    <option value="buy">Buy</option>
-                    <option value="sell">Sell</option>
-                  </select>
+                    placeholder="Select"
+                    :options="[{ value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }]"
+                  />
                 </div>
 
                 <div>
@@ -624,7 +607,7 @@
           <div v-show="showAdditionalFields" class="grid grid-cols-1 gap-6 sm:grid-cols-2">
 
           <div>
-            <label for="mae" class="label">MAE (Max Adverse Excursion)</label>
+            <label for="mae" class="label">MAE (Max Adverse Excursion) {{ excursionUnitSuffix }}</label>
             <input
               id="mae"
               v-model="form.mae"
@@ -632,12 +615,12 @@
               step="any"
               class="input"
               placeholder="0"
-              title="Maximum loss from entry to exit"
+              :title="excursionInputTitle('Maximum adverse excursion from entry to exit')"
             />
           </div>
 
           <div>
-            <label for="mfe" class="label">MFE (Max Favorable Excursion)</label>
+            <label for="mfe" class="label">MFE (Max Favorable Excursion) {{ excursionUnitSuffix }}</label>
             <input
               id="mfe"
               v-model="form.mfe"
@@ -645,12 +628,12 @@
               step="any"
               class="input"
               placeholder="0"
-              title="Maximum profit from entry to exit"
+              :title="excursionInputTitle('Maximum favorable excursion from entry to exit')"
             />
           </div>
 
           <div>
-            <label for="postExitMae" class="label">After-Trade MAE</label>
+            <label for="postExitMae" class="label">After-Trade MAE (from entry) {{ excursionUnitSuffix }}</label>
             <input
               id="postExitMae"
               v-model="form.postExitMae"
@@ -658,12 +641,12 @@
               step="any"
               class="input"
               placeholder="0"
-              title="Max adverse excursion observed after exit (manual entry for instruments without intraday data, e.g. futures)"
+              :title="excursionInputTitle('Maximum adverse excursion from entry through the configured after-trade window')"
             />
           </div>
 
           <div>
-            <label for="postExitMfe" class="label">After-Trade MFE</label>
+            <label for="postExitMfe" class="label">After-Trade MFE (from entry) {{ excursionUnitSuffix }}</label>
             <input
               id="postExitMfe"
               v-model="form.postExitMfe"
@@ -671,9 +654,13 @@
               step="any"
               class="input"
               placeholder="0"
-              title="Max favorable excursion observed after exit (manual entry for instruments without intraday data, e.g. futures)"
+              :title="excursionInputTitle('Maximum favorable excursion from entry through the configured after-trade window')"
             />
           </div>
+
+          <p v-if="form.instrumentType === 'future'" class="sm:col-span-2 text-xs text-gray-500 dark:text-gray-400">
+            Futures excursion values are entered in points and saved as dollars using quantity × point value.
+          </p>
 
           <div>
             <label for="postExitWindowOverrideMinutes" class="label">After-Trade Window Override (minutes)</label>
@@ -702,18 +689,16 @@
                 @keydown.enter.prevent="handleBrokerInputEnter"
                 @blur="handleBrokerInputBlur"
               />
-              <select
+              <BaseSelect
                 v-else
-                id="broker"
-                v-model="form.broker"
-                class="input pr-20"
-                @change="handleBrokerSelect"
-              >
-                <option value="">Select broker</option>
-                <option v-if="form.broker && !brokersList.includes(form.broker)" :value="form.broker">{{ form.broker }}</option>
-                <option v-for="broker in brokersList" :key="broker" :value="broker">{{ broker }}</option>
-                <option value="__custom__">+ Add New Broker</option>
-              </select>
+                noun="brokers"
+                placeholder="Select broker"
+                add-label="Add New Broker"
+                :options="brokersList"
+                :model-value="form.broker"
+                @update:model-value="form.broker = $event"
+                @add="startAddBroker"
+              />
               <button
                 v-if="showBrokerInput"
                 type="button"
@@ -738,18 +723,16 @@
                 @keydown.enter.prevent="handleAccountInputEnter"
                 @blur="handleAccountInputBlur"
               />
-              <select
+              <BaseSelect
                 v-else
-                id="account_identifier"
-                v-model="form.account_identifier"
-                class="input pr-20"
-                @change="handleAccountSelect"
-              >
-                <option value="">Select account</option>
-                <option v-if="form.account_identifier && !accountsList.includes(form.account_identifier)" :value="form.account_identifier">{{ form.account_identifier }}</option>
-                <option v-for="account in accountsList" :key="account" :value="account">{{ account }}</option>
-                <option value="__custom__">+ Add New Account</option>
-              </select>
+                noun="accounts"
+                placeholder="Select account"
+                add-label="Add New Account"
+                :options="accountsList"
+                :model-value="form.account_identifier"
+                @update:model-value="form.account_identifier = $event"
+                @add="startAddAccount"
+              />
               <button
                 v-if="showAccountInput"
                 type="button"
@@ -776,7 +759,7 @@
                     max="10"
                     step="1"
                     class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 slider"
-                    :style="{ background: `linear-gradient(to right, #F0812A 0%, #F0812A ${(form.confidence - 1) * 11.11}%, #e5e7eb ${(form.confidence - 1) * 11.11}%, #e5e7eb 100%)` }"
+                    :style="{ background: `linear-gradient(to right, var(--color-primary-500) 0%, var(--color-primary-500) ${(form.confidence - 1) * 11.11}%, #e5e7eb ${(form.confidence - 1) * 11.11}%, #e5e7eb 100%)` }"
                   />
                   <div class="flex justify-between text-xs text-gray-400 mt-1">
                     <span v-for="i in 10" :key="i" class="w-4 text-center">{{ i }}</span>
@@ -823,15 +806,17 @@
           <div class="sm:col-span-2 flex items-center justify-between">
             <h3 class="text-md font-medium text-gray-900 dark:text-white">Option Details</h3>
             <div class="flex items-center gap-2">
-              <select
-                v-model="selectedOptionsTemplate"
-                @change="applyOptionsTemplate"
-                :disabled="optionsTemplates.length === 0"
-                class="text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 disabled:opacity-50"
-              >
-                <option value="">{{ optionsTemplates.length === 0 ? 'No templates saved' : 'Load Template...' }}</option>
-                <option v-for="t in optionsTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
-              </select>
+              <div class="w-44">
+                <BaseSelect
+                  v-model="selectedOptionsTemplate"
+                  :options="optionsTemplates"
+                  value-key="id"
+                  label-key="name"
+                  :placeholder="optionsTemplates.length === 0 ? 'No templates saved' : 'Load Template...'"
+                  :disabled="optionsTemplates.length === 0"
+                  @change="applyOptionsTemplate"
+                />
+              </div>
               <button
                 type="button"
                 @click="showSaveOptionsTemplateModal = true"
@@ -864,11 +849,11 @@
 
           <div>
             <label for="optionType" class="label">Option Type *</label>
-            <select id="optionType" v-model="form.optionType" :required="form.instrumentType === 'option'" class="input">
-              <option value="">Select type</option>
-              <option value="call">Call</option>
-              <option value="put">Put</option>
-            </select>
+            <BaseSelect
+              v-model="form.optionType"
+              placeholder="Select type"
+              :options="[{ value: 'call', label: 'Call' }, { value: 'put', label: 'Put' }]"
+            />
           </div>
 
           <div>
@@ -914,15 +899,17 @@
           <div class="sm:col-span-2 flex items-center justify-between">
             <h3 class="text-md font-medium text-gray-900 dark:text-white">Futures Details</h3>
             <div class="flex items-center gap-2">
-              <select
-                v-model="selectedFuturesTemplate"
-                @change="applyFuturesTemplate"
-                :disabled="futuresTemplates.length === 0"
-                class="text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 disabled:opacity-50"
-              >
-                <option value="">{{ futuresTemplates.length === 0 ? 'No templates saved' : 'Load Template...' }}</option>
-                <option v-for="t in futuresTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
-              </select>
+              <div class="w-44">
+                <BaseSelect
+                  v-model="selectedFuturesTemplate"
+                  :options="futuresTemplates"
+                  value-key="id"
+                  label-key="name"
+                  :placeholder="futuresTemplates.length === 0 ? 'No templates saved' : 'Load Template...'"
+                  :disabled="futuresTemplates.length === 0"
+                  @change="applyFuturesTemplate"
+                />
+              </div>
               <button
                 type="button"
                 @click="showSaveFuturesTemplateModal = true"
@@ -955,21 +942,18 @@
 
           <div>
             <label for="contractMonth" class="label">Contract Month *</label>
-            <select id="contractMonth" v-model="form.contractMonth" :required="form.instrumentType === 'future'" class="input">
-              <option value="">Select month</option>
-              <option value="JAN">January</option>
-              <option value="FEB">February</option>
-              <option value="MAR">March</option>
-              <option value="APR">April</option>
-              <option value="MAY">May</option>
-              <option value="JUN">June</option>
-              <option value="JUL">July</option>
-              <option value="AUG">August</option>
-              <option value="SEP">September</option>
-              <option value="OCT">October</option>
-              <option value="NOV">November</option>
-              <option value="DEC">December</option>
-            </select>
+            <BaseSelect
+              v-model="form.contractMonth"
+              placeholder="Select month"
+              :options="[
+                { value: 'JAN', label: 'January' }, { value: 'FEB', label: 'February' },
+                { value: 'MAR', label: 'March' }, { value: 'APR', label: 'April' },
+                { value: 'MAY', label: 'May' }, { value: 'JUN', label: 'June' },
+                { value: 'JUL', label: 'July' }, { value: 'AUG', label: 'August' },
+                { value: 'SEP', label: 'September' }, { value: 'OCT', label: 'October' },
+                { value: 'NOV', label: 'November' }, { value: 'DEC', label: 'December' }
+              ]"
+            />
           </div>
 
           <div>
@@ -1013,7 +997,7 @@
         </div>
 
         <!-- Strategy Field (Collapsible) -->
-        <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+        <div class="border border-gray-200 dark:border-gray-700 rounded-lg">
           <button
             type="button"
             @click="showStrategy = !showStrategy"
@@ -1042,24 +1026,25 @@
                 @keydown.enter.prevent="handleStrategyInputEnter"
                 @blur="handleStrategyInputBlur"
               />
-              <select
+              <BaseSelect
                 v-else
-                id="strategy"
-                v-model="form.strategy"
-                class="input"
-                @change="handleStrategySelect"
-              >
-                <option value="">Select strategy</option>
-                <option v-if="form.strategy && !strategiesList.includes(form.strategy)" :value="form.strategy">{{ form.strategy }}</option>
-                <option v-for="strategy in strategiesList" :key="strategy" :value="strategy">{{ strategy }}</option>
-                <option value="__custom__">+ Add New Strategy</option>
-              </select>
+                noun="strategies"
+                placeholder="Select strategy"
+                add-label="Add New Strategy"
+                manage-label="Manage strategies"
+                :options="visibleStrategies"
+                :show-manage="strategiesList.length > 0"
+                :model-value="form.strategy"
+                @update:model-value="form.strategy = $event"
+                @add="startAddStrategy"
+                @manage="showStrategyManager = true"
+              />
             </div>
           </div>
         </div>
 
         <!-- Setup Field (Collapsible) -->
-        <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+        <div class="border border-gray-200 dark:border-gray-700 rounded-lg">
           <button
             type="button"
             @click="showSetup = !showSetup"
@@ -1088,21 +1073,42 @@
                 @keydown.enter.prevent="handleSetupInputEnter"
                 @blur="handleSetupInputBlur"
               />
-              <select
+              <BaseSelect
                 v-else
-                id="setup"
-                v-model="form.setup"
-                class="input"
-                @change="handleSetupSelect"
-              >
-                <option value="">Select setup</option>
-                <option v-if="form.setup && !setupsList.includes(form.setup)" :value="form.setup">{{ form.setup }}</option>
-                <option v-for="setup in setupsList" :key="setup" :value="setup">{{ setup }}</option>
-                <option value="__custom__">+ Add New Setup</option>
-              </select>
+                noun="setups"
+                placeholder="Select setup"
+                add-label="Add New Setup"
+                manage-label="Manage setups"
+                :options="visibleSetups"
+                :show-manage="setupsList.length > 0"
+                :model-value="form.setup"
+                @update:model-value="form.setup = $event"
+                @add="startAddSetup"
+                @manage="showSetupManager = true"
+              />
             </div>
           </div>
         </div>
+
+        <!-- Strategy / Setup manage-hide modals -->
+        <DropdownItemManager
+          v-model:show="showStrategyManager"
+          title="Manage Strategies"
+          reorderable
+          :items="orderedStrategyUsage"
+          :hidden="hiddenStrategies"
+          @toggle="toggleStrategy"
+          @move="handleStrategyMove"
+        />
+        <DropdownItemManager
+          v-model:show="showSetupManager"
+          title="Manage Setups"
+          reorderable
+          :items="orderedSetupUsage"
+          :hidden="hiddenSetups"
+          @toggle="toggleSetup"
+          @move="handleSetupMove"
+        />
 
         <!-- Tags Field (Collapsible) -->
         <div class="border border-gray-200 dark:border-gray-700 rounded-lg">
@@ -1123,41 +1129,7 @@
             </svg>
           </button>
           <div v-show="showTags" class="p-4">
-            <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Comma separated</p>
-            <div class="relative">
-              <input
-                id="tags"
-                v-model="tagsInput"
-                type="text"
-                class="input"
-                placeholder="momentum, earnings, breakout"
-                @focus="handleTagsFocus"
-                @blur="handleTagsBlur"
-                @keydown.down.prevent="moveTagSuggestion(1)"
-                @keydown.up.prevent="moveTagSuggestion(-1)"
-                @keydown.enter="applyActiveTagSuggestion"
-              />
-              <div
-                v-if="showTagSuggestions"
-                class="absolute z-10 mt-1 w-full rounded-md bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 max-h-48 overflow-auto"
-              >
-                <ul class="py-1 text-sm text-gray-700 dark:text-gray-200">
-                  <li
-                    v-for="(tag, index) in tagSuggestions"
-                    :key="tag"
-                    @mousedown.prevent="selectTagSuggestion(tag)"
-                    :class="[
-                      'px-3 py-1 cursor-pointer flex items-center justify-between',
-                      index === activeTagSuggestionIndex
-                        ? 'bg-primary-100 text-primary-800 dark:bg-primary-900/40 dark:text-primary-100'
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-700'
-                    ]"
-                  >
-                    <span>{{ tag }}</span>
-                  </li>
-                </ul>
-              </div>
-            </div>
+            <TagManagement v-model="selectedTags" />
           </div>
         </div>
 
@@ -1538,6 +1510,12 @@ import ChartUpload from '@/components/trades/ChartUpload.vue'
 import TradeCharts from '@/components/trades/TradeCharts.vue'
 import api from '@/services/api'
 import SymbolAutocomplete from '@/components/common/SymbolAutocomplete.vue'
+import DropdownItemManager from '@/components/trades/DropdownItemManager.vue'
+import TagManagement from '@/components/trades/TagManagement.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
+import { useHiddenDropdownItems } from '@/composables/useHiddenDropdownItems'
+import { useStrategyOrder } from '@/composables/useStrategyOrder'
+import { useSetupOrder } from '@/composables/useSetupOrder'
 
 // Load section preferences from localStorage
 const defaultSectionPrefs = {
@@ -1669,6 +1647,64 @@ const showPublicProfileModal = ref(false)
 const previousIsPublicValue = ref(false)
 
 const isEdit = computed(() => !!route.params.id)
+
+const isFutureForm = computed(() => form.value.instrumentType === 'future')
+const excursionUnitSuffix = computed(() => isFutureForm.value ? '(points)' : '($)')
+
+function getExcursionStorageMultiplier(source = form.value) {
+  if ((source.instrumentType || source.instrument_type) !== 'future') return 1
+  const quantity = Math.abs(Number(source.quantity) || 0)
+  const pointValue = Number(source.pointValue ?? source.point_value) || 0
+  return quantity > 0 && pointValue > 0 ? quantity * pointValue : 1
+}
+
+function capturedMoveDollars(source) {
+  const entry = Number(source.entryPrice ?? source.entry_price)
+  const exit = Number(source.exitPrice ?? source.exit_price)
+  const quantity = Math.abs(Number(source.quantity) || 0)
+  if (!Number.isFinite(entry) || !Number.isFinite(exit) || quantity <= 0) return null
+
+  const side = source.side
+  const move = side === 'short' ? entry - exit : exit - entry
+  return Math.max(0, move * quantity * getExcursionStorageMultiplier(source))
+}
+
+function hasLegacyFuturesExcursionUnits(source) {
+  if ((source.instrumentType || source.instrument_type) !== 'future') return false
+  const scale = getExcursionStorageMultiplier(source)
+  if (scale <= 1) return false
+
+  const captured = capturedMoveDollars(source)
+  if (!captured || captured <= 0) return false
+
+  const candidates = [source.mfe, source.postExitMfe ?? source.post_exit_mfe]
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value > 0)
+
+  return candidates.some(value => value < captured - 0.005 && value * scale >= captured - 0.005)
+}
+
+function dollarsToExcursionInput(value, source = form.value) {
+  if (value === null || value === undefined || value === '') return null
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return null
+  if (hasLegacyFuturesExcursionUnits(source)) return numeric
+  return (source.instrumentType || source.instrument_type) === 'future'
+    ? numeric / getExcursionStorageMultiplier(source)
+    : numeric
+}
+
+function excursionInputToDollars(value) {
+  if (value === null || value === undefined || value === '') return null
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return null
+  return isFutureForm.value ? numeric * getExcursionStorageMultiplier() : numeric
+}
+
+function excursionInputTitle(baseText) {
+  if (!isFutureForm.value) return `${baseText}. Enter dollars.`
+  return `${baseText}. Enter futures points; TradeTally saves the dollar value using quantity × point value.`
+}
 
 // Check if we have grouped executions (complete trades with entry/exit)
 const hasGroupedExecutions = computed(() => {
@@ -1820,10 +1856,7 @@ const form = ref({
   executions: []
 })
 
-const tagsInput = ref('')
-const allTags = ref([]) // All saved tags for the user
-const tagsInputFocused = ref(false)
-const activeTagSuggestionIndex = ref(0)
+const selectedTags = ref([]) // Tag names assigned to this trade
 const currentImages = ref([])
 const trade = ref(null) // Store full trade data including charts
 const chartUploadRef = ref(null)
@@ -1851,6 +1884,59 @@ const showBrokerInput = ref(false)
 const showAccountInput = ref(false)
 const showStrategyInput = ref(false)
 const showSetupInput = ref(false)
+
+// Hide/manage strategies and setups in the dropdowns
+const {
+  hiddenStrategies,
+  hiddenSetups,
+  refresh: refreshHiddenItems,
+  isStrategyHidden,
+  isSetupHidden,
+  toggleStrategy,
+  toggleSetup
+} = useHiddenDropdownItems()
+const {
+  orderNames: orderStrategyNames,
+  orderUsageItems: orderStrategyUsageItems,
+  moveStrategyInUsage,
+  refresh: refreshStrategyOrder
+} = useStrategyOrder()
+const {
+  orderNames: orderSetupNames,
+  orderUsageItems: orderSetupUsageItems,
+  moveSetupInUsage,
+  refresh: refreshSetupOrder
+} = useSetupOrder()
+const strategyUsage = ref([]) // [{ name, count }] most-used first
+const setupUsage = ref([])
+const showStrategyManager = ref(false)
+const showSetupManager = ref(false)
+
+const orderedStrategyUsage = computed(() => orderStrategyUsageItems(strategyUsage.value))
+const orderedSetupUsage = computed(() => orderSetupUsageItems(setupUsage.value))
+
+function handleStrategyMove({ name, direction }) {
+  moveStrategyInUsage(strategyUsage.value, name, direction)
+  strategiesList.value = orderStrategyNames(strategiesList.value)
+}
+
+function handleSetupMove({ name, direction }) {
+  moveSetupInUsage(setupUsage.value, name, direction)
+  setupsList.value = orderSetupNames(setupsList.value)
+}
+
+// Strategies shown in the dropdown: drop hidden ones, but always keep the
+// currently selected value visible so editing a trade never loses its strategy.
+const visibleStrategies = computed(() =>
+  orderStrategyNames(
+    strategiesList.value.filter(s => !isStrategyHidden(s) || s === form.value.strategy)
+  )
+)
+const visibleSetups = computed(() =>
+  orderSetupNames(
+    setupsList.value.filter(s => !isSetupHidden(s) || s === form.value.setup)
+  )
+)
 
 function formatDateTimeLocal(date) {
   if (!date) return ''
@@ -1933,6 +2019,17 @@ async function loadTrade() {
     // Create local reference for easier access
     const tradeData = trade.value
 
+    const excursionSource = {
+      instrument_type: tradeData.instrument_type || 'stock',
+      side: tradeData.side,
+      entry_price: tradeData.entry_price,
+      exit_price: tradeData.exit_price,
+      quantity: tradeData.quantity,
+      point_value: tradeData.point_value ?? tradeData.pointValue,
+      mfe: tradeData.mfe,
+      post_exit_mfe: tradeData.post_exit_mfe ?? tradeData.postExitMfe
+    }
+
     form.value = {
       symbol: tradeData.symbol,
       entryTime: formatDateTimeLocal(tradeData.entry_time),
@@ -1945,10 +2042,10 @@ async function loadTrade() {
       entryCommission: tradeData.entry_commission != null ? Number(tradeData.entry_commission) : (tradeData.commission != null ? Number(tradeData.commission) : 0),
       exitCommission: tradeData.exit_commission != null ? Number(tradeData.exit_commission) : 0,
       fees: tradeData.fees != null ? Number(tradeData.fees) : 0,
-      mae: tradeData.mae != null ? Number(tradeData.mae) : null,
-      mfe: tradeData.mfe != null ? Number(tradeData.mfe) : null,
-      postExitMae: (tradeData.post_exit_mae ?? tradeData.postExitMae) != null ? Number(tradeData.post_exit_mae ?? tradeData.postExitMae) : null,
-      postExitMfe: (tradeData.post_exit_mfe ?? tradeData.postExitMfe) != null ? Number(tradeData.post_exit_mfe ?? tradeData.postExitMfe) : null,
+      mae: dollarsToExcursionInput(tradeData.mae, excursionSource),
+      mfe: dollarsToExcursionInput(tradeData.mfe, excursionSource),
+      postExitMae: dollarsToExcursionInput(tradeData.post_exit_mae ?? tradeData.postExitMae, excursionSource),
+      postExitMfe: dollarsToExcursionInput(tradeData.post_exit_mfe ?? tradeData.postExitMfe, excursionSource),
       postExitWindowOverrideMinutes: tradeData.post_exit_window_override_minutes ?? tradeData.postExitWindowOverrideMinutes ?? null,
       stopLoss: (tradeData.stop_loss || tradeData.stopLoss) != null ? Number(tradeData.stop_loss || tradeData.stopLoss) : null,
       // Take profit values: use take_profit_targets array as source of truth
@@ -2203,7 +2300,7 @@ async function loadTrade() {
       })()
     }
 
-    tagsInput.value = tradeData.tags ? tradeData.tags.join(', ') : ''
+    selectedTags.value = Array.isArray(tradeData.tags) ? [...tradeData.tags] : []
     currentImages.value = tradeData.attachments || []
   } catch (err) {
     showError('Error', 'Failed to load trade')
@@ -2491,10 +2588,10 @@ async function handleSubmit(opts = {}) {
       quantity: calculatedQuantity,
       commission: calculatedCommission,
       fees: calculatedFees,
-      mae: form.value.mae !== null && form.value.mae !== '' ? parseFloat(form.value.mae) : null,
-      mfe: form.value.mfe !== null && form.value.mfe !== '' ? parseFloat(form.value.mfe) : null,
-      postExitMae: form.value.postExitMae !== null && form.value.postExitMae !== '' ? parseFloat(form.value.postExitMae) : null,
-      postExitMfe: form.value.postExitMfe !== null && form.value.postExitMfe !== '' ? parseFloat(form.value.postExitMfe) : null,
+      mae: excursionInputToDollars(form.value.mae),
+      mfe: excursionInputToDollars(form.value.mfe),
+      postExitMae: excursionInputToDollars(form.value.postExitMae),
+      postExitMfe: excursionInputToDollars(form.value.postExitMfe),
       postExitWindowOverrideMinutes: form.value.postExitWindowOverrideMinutes ? parseInt(form.value.postExitWindowOverrideMinutes, 10) : null,
       confidence: parseInt(form.value.confidence) || 5,
       broker: form.value.broker || '',
@@ -2503,7 +2600,7 @@ async function handleSubmit(opts = {}) {
       setup: form.value.setup || '',
       notes: form.value.notes || '',
       isPublic: form.value.isPublic || false,
-      tags: tagsInput.value ? tagsInput.value.split(',').map(tag => tag.trim()).filter(Boolean) : [],
+      tags: Array.isArray(selectedTags.value) ? [...selectedTags.value] : [],
       // Risk management fields
       stopLoss: form.value.stopLoss && form.value.stopLoss !== '' ? parseFloat(form.value.stopLoss) : null,
       takeProfit: form.value.takeProfit && form.value.takeProfit !== '' ? parseFloat(form.value.takeProfit) : null,
@@ -2868,13 +2965,15 @@ watch(() => form.value.entryTime, async (newTime) => {
 
 async function fetchLists() {
   try {
-    // Fetch strategies list
+    // Fetch strategies list (most-used first) plus per-item usage counts
     const strategiesResponse = await api.get('/trades/strategies')
-    strategiesList.value = strategiesResponse.data.strategies || []
+    strategyUsage.value = strategiesResponse.data.usage || []
+    strategiesList.value = orderStrategyNames(strategiesResponse.data.strategies || [])
 
     // Fetch setups list
     const setupsResponse = await api.get('/trades/setups')
-    setupsList.value = setupsResponse.data.setups || []
+    setupsList.value = orderSetupNames(setupsResponse.data.setups || [])
+    setupUsage.value = setupsResponse.data.usage || []
 
     // Fetch brokers list
     const brokersResponse = await api.get('/trades/brokers')
@@ -2902,135 +3001,13 @@ async function fetchUserSettings() {
   }
 }
 
-// Fetch all user tags for autocomplete suggestions
-async function fetchTags() {
-  try {
-    const response = await api.get('/tags')
-    const tags = response.data?.tags || []
-    // Store only unique tag names, sorted alphabetically
-    const names = Array.from(
-      new Set(
-        tags
-          .map(tag => tag.name)
-          .filter(name => typeof name === 'string' && name.trim().length > 0)
-      )
-    ).sort((a, b) => a.localeCompare(b))
-    allTags.value = names
-  } catch (error) {
-    console.error('Error fetching tags for autocomplete:', error)
-  }
-}
-
-// Computed: current list of tags already entered in input
-const currentTags = computed(() => {
-  if (!tagsInput.value) return []
-  return tagsInput.value
-    .split(',')
-    .map(tag => tag.trim())
-    .filter(Boolean)
-})
-
-// Computed: the partial tag the user is currently typing
-const currentTagQuery = computed(() => {
-  if (!tagsInput.value) return ''
-  const parts = tagsInput.value.split(',')
-  return parts[parts.length - 1].trim()
-})
-
-// Computed: suggestions based on current query and existing tags
-const tagSuggestions = computed(() => {
-  const query = currentTagQuery.value.toLowerCase()
-  if (!query) return []
-
-  const alreadySelected = new Set(currentTags.value.map(t => t.toLowerCase()))
-
-  // Only suggest tags that start with the current query and aren't already selected
-  const matches = allTags.value.filter(name => {
-    const lower = name.toLowerCase()
-    return lower.startsWith(query) && !alreadySelected.has(lower)
-  })
-
-  // Reset active index when the suggestion list changes
-  if (activeTagSuggestionIndex.value >= matches.length) {
-    activeTagSuggestionIndex.value = 0
-  }
-
-  return matches.slice(0, 10)
-})
-
-const showTagSuggestions = computed(() => {
-  return tagsInputFocused.value && tagSuggestions.value.length > 0
-})
-
-function handleTagsFocus() {
-  tagsInputFocused.value = true
-}
-
-function handleTagsBlur() {
-  // Delay hiding so a click on a suggestion can register
+function startAddBroker() {
+  form.value.broker = ''
+  showBrokerInput.value = true
+  // Focus the input after a brief delay to allow DOM update
   setTimeout(() => {
-    tagsInputFocused.value = false
-  }, 150)
-}
-
-function selectTagSuggestion(tag) {
-  const parts = tagsInput.value.split(',')
-  // Replace the current partial with the selected tag
-  if (parts.length > 0) {
-    parts[parts.length - 1] = ` ${tag}` // keep preceding comma/space style
-  } else {
-    parts[0] = tag
-  }
-
-  // Normalize spacing: join with comma+space
-  const normalized = parts
-    .map((part, index) => {
-      const trimmed = part.trim()
-      return index === 0 ? trimmed : trimmed
-    })
-    .filter(Boolean)
-    .join(', ')
-
-  tagsInput.value = normalized + ', '
-  // Keep focus on the input so user can continue typing
-  nextTick(() => {
-    const el = document.getElementById('tags')
-    if (el) {
-      el.focus()
-    }
-  })
-}
-
-function moveTagSuggestion(direction) {
-  if (!showTagSuggestions.value) return
-  const total = tagSuggestions.value.length
-  if (total === 0) return
-
-  const nextIndex = (activeTagSuggestionIndex.value + direction + total) % total
-  activeTagSuggestionIndex.value = nextIndex
-}
-
-function applyActiveTagSuggestion(event) {
-  if (!showTagSuggestions.value) {
-    // No suggestions visible, let the form handle Enter normally
-    return
-  }
-  event.preventDefault()
-  const tag = tagSuggestions.value[activeTagSuggestionIndex.value]
-  if (tag) {
-    selectTagSuggestion(tag)
-  }
-}
-
-function handleBrokerSelect(event) {
-  if (event.target.value === '__custom__') {
-    form.value.broker = ''
-    showBrokerInput.value = true
-    // Focus the input after a brief delay to allow DOM update
-    setTimeout(() => {
-      document.getElementById('broker')?.focus()
-    }, 100)
-  }
+    document.getElementById('broker')?.focus()
+  }, 100)
 }
 
 function handleBrokerInputEnter() {
@@ -3056,15 +3033,13 @@ function handleBrokerInputBlur() {
   showBrokerInput.value = false
 }
 
-function handleAccountSelect(event) {
-  if (event.target.value === '__custom__') {
-    form.value.account_identifier = ''
-    showAccountInput.value = true
-    // Focus the input after a brief delay to allow DOM update
-    setTimeout(() => {
-      document.getElementById('account_identifier')?.focus()
-    }, 100)
-  }
+function startAddAccount() {
+  form.value.account_identifier = ''
+  showAccountInput.value = true
+  // Focus the input after a brief delay to allow DOM update
+  setTimeout(() => {
+    document.getElementById('account_identifier')?.focus()
+  }, 100)
 }
 
 async function createAccountRecord(identifier) {
@@ -3117,14 +3092,12 @@ function handleAccountInputBlur() {
   showAccountInput.value = false
 }
 
-function handleStrategySelect(event) {
-  if (event.target.value === '__custom__') {
-    form.value.strategy = ''
-    showStrategyInput.value = true
-    setTimeout(() => {
-      document.getElementById('strategy')?.focus()
-    }, 100)
-  }
+function startAddStrategy() {
+  form.value.strategy = ''
+  showStrategyInput.value = true
+  setTimeout(() => {
+    document.getElementById('strategy')?.focus()
+  }, 100)
 }
 
 function handleStrategyInputEnter() {
@@ -3150,14 +3123,12 @@ function handleStrategyInputBlur() {
   showStrategyInput.value = false
 }
 
-function handleSetupSelect(event) {
-  if (event.target.value === '__custom__') {
-    form.value.setup = ''
-    showSetupInput.value = true
-    setTimeout(() => {
-      document.getElementById('setup')?.focus()
-    }, 100)
-  }
+function startAddSetup() {
+  form.value.setup = ''
+  showSetupInput.value = true
+  setTimeout(() => {
+    document.getElementById('setup')?.focus()
+  }, 100)
 }
 
 function handleSetupInputEnter() {
@@ -3368,10 +3339,12 @@ async function deleteTemplate(id, type) {
 }
 
 onMounted(async () => {
+  refreshHiddenItems()
+  refreshStrategyOrder()
+  refreshSetupOrder()
   await checkProAccess()
   await fetchLists()
   await fetchUserSettings()
-  await fetchTags()
   await fetchInstrumentTemplates()
 
   if (isEdit.value) {

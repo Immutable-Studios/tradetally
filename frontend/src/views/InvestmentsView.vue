@@ -72,6 +72,17 @@
                 >
                     Stock Scanner
                 </button>
+                <button
+                    @click="activeTab = 'income'"
+                    :class="[
+                        'py-4 px-1 border-b-2 font-medium text-sm',
+                        activeTab === 'income'
+                            ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300',
+                    ]"
+                >
+                    Income
+                </button>
             </nav>
         </div>
 
@@ -587,10 +598,10 @@
                                     <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider" title="Current market value and average cost basis per share">
                                         Value
                                     </th>
-                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-help" title="This position's current share of total portfolio value">
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-help whitespace-nowrap" title="This position's current share of total portfolio value">
                                         Actual %
                                     </th>
-                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-help" title="Your desired allocation percentage for this position. Edit and save to track rebalancing needs">
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-help whitespace-nowrap" title="Your desired allocation percentage for this position. Edit and save to track rebalancing needs">
                                         Target %
                                     </th>
                                     <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-help" title="How far the actual allocation has strayed from your target. Highlighted when it exceeds your drift alert threshold">
@@ -619,12 +630,12 @@
                                                 size-class="w-8 h-8"
                                             />
                                             <div>
-                                                <div class="flex items-center gap-2">
+                                                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                                                     <span class="text-sm font-medium text-gray-900 dark:text-white">
                                                         {{ position.symbol }}
                                                     </span>
                                                     <span
-                                                        class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+                                                        class="inline-flex shrink-0 items-center whitespace-nowrap px-2 py-0.5 rounded-full text-xs font-medium bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
                                                     >
                                                         {{ positionSourceLabel(position) }}
                                                     </span>
@@ -653,7 +664,7 @@
                                         {{ formatPercent(position.actualAllocationPercent, false) }}
                                     </td>
                                     <td class="px-6 py-4 text-right text-sm">
-                                        <div class="flex items-center justify-end gap-2">
+                                        <div class="flex flex-col items-end gap-1">
                                             <input
                                                 v-model="targetAllocationDrafts[position.symbol]"
                                                 type="number"
@@ -730,7 +741,7 @@
                                             Analyze
                                         </button>
                                         <button
-                                            v-if="position.holdingId && !position.includesOpenTrades"
+                                            v-if="position.holdingId && !position.includesOpenTrades && !position.hasPlaidLots"
                                             @click="confirmDeleteHolding(position)"
                                             class="text-red-600 hover:text-red-800"
                                         >
@@ -1317,6 +1328,11 @@
             </div>
         </div>
 
+        <!-- Income Tab -->
+        <div v-if="activeTab === 'income'">
+            <IncomeAnalytics />
+        </div>
+
         <!-- Stock Analyzer Tab (DCF Valuation) -->
         <div v-if="activeTab === 'analyzer'">
             <!-- Search Bar -->
@@ -1549,6 +1565,7 @@ import { useScannerStore } from "@/stores/scanner";
 import { useGlobalAccountFilter } from "@/composables/useGlobalAccountFilter";
 import StockLogo from "@/components/common/StockLogo.vue";
 import SymbolAutocomplete from "@/components/common/SymbolAutocomplete.vue";
+import IncomeAnalytics from "@/components/investments/IncomeAnalytics.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -1559,7 +1576,7 @@ const { selectedAccount, selectedAccountLabel, accounts, fetchAccounts, setAccou
     useGlobalAccountFilter();
 
 // Valid tab names
-const validTabs = ["screener", "holdings", "scanner"];
+const validTabs = ["screener", "holdings", "scanner", "income"];
 
 // Initialize tab from URL or default to 'screener'
 // Legacy 'analyzer' tab is now merged into 'screener'
@@ -2287,8 +2304,9 @@ async function onHoldingCreated() {
 }
 
 function positionSourceLabel(position) {
-    if (position.source === "mixed") return "Holding + Open Trade";
-    if (position.source === "trades") return "Open Trade";
+    if (position.source === "mixed") return "Holding + Open";
+    if (position.source === "trades") return "Open";
+    if (position.hasPlaidLots) return "Plaid Synced";
     return "Holding";
 }
 
