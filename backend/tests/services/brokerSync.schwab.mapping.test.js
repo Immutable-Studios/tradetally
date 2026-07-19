@@ -389,6 +389,60 @@ describe('Schwab parseTransactions (full payload -> trades)', () => {
     ]);
   });
 
+  test('does not FIFO-match closes across different Schwab accounts', () => {
+    // Regression: multi-account sync concatenated all fills and matched by
+    // symbol only, so a taxable sell could close IRA lots (and leave false
+    // open remnants on the taxable account).
+    const trades = schwabService.parseTransactions([
+      schwabEquityTx({
+        orderId: 1006400000001,
+        time: '2026-07-13T14:41:45Z',
+        symbol: 'LABU',
+        price: 270.95,
+        amount: 200,
+        positionEffect: 'OPENING',
+        accountIdentifier: '****5119'
+      }),
+      schwabEquityTx({
+        orderId: 1006400000002,
+        time: '2026-07-01T15:00:00Z',
+        symbol: 'LABU',
+        price: 180,
+        amount: 50,
+        positionEffect: 'OPENING',
+        accountIdentifier: '****7790'
+      }),
+      // Sell in IRA should close the IRA lot only — not the taxable buy
+      schwabEquityTx({
+        orderId: 1006400000003,
+        time: '2026-07-16T14:32:03Z',
+        symbol: 'LABU',
+        price: 263.705,
+        amount: -200,
+        positionEffect: 'CLOSING',
+        accountIdentifier: '****7790'
+      })
+    ]);
+
+    const taxable = trades.filter(t => t.accountIdentifier === '****5119');
+    const ira = trades.filter(t => t.accountIdentifier === '****7790');
+
+    expect(taxable).toHaveLength(1);
+    expect(taxable[0].quantity).toBe(200);
+    expect(taxable[0].exitPrice).toBeNull();
+    expect(taxable[0].exitTime).toBeNull();
+
+    const iraClosed = ira.filter(t => t.exitPrice != null);
+    const iraOpen = ira.filter(t => t.exitPrice == null);
+    // 50 matched to the IRA open lot + 150 orphan close (opened before window)
+    expect(iraClosed.reduce((sum, t) => sum + t.quantity, 0)).toBe(200);
+    expect(iraClosed.some(t => t.entryPrice != null && t.quantity === 50)).toBe(true);
+    expect(iraClosed.some(t => t.entryPrice == null && t.quantity === 150)).toBe(true);
+    // Remaining IRA sell must NOT close the taxable account's open lot.
+    expect(iraOpen).toHaveLength(0);
+    expect(iraClosed.every(t => t.accountIdentifier === '****7790')).toBe(true);
+  });
+
   test('partial exits split the entry commission pro rata without double counting', () => {
     // Regression: the entry commission was prorated against the lot's
     // REMAINING quantity without being consumed, so a 50/50 split of a

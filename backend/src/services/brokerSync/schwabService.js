@@ -519,11 +519,58 @@ class SchwabService {
    * Works across days - open Monday, close Tuesday = one complete trade
    * Then groups multiple executions of the same symbol on the same day
    */
+  /**
+   * FIFO matching key: account + instrument.
+   * Multi-account Schwab sync concatenates transactions; without the account
+   * segment, a sell in taxable can close lots in an IRA (and leave false opens).
+   */
+  _positionMatchKey(txOrPos) {
+    const instrument = txOrPos.matchingSymbol || txOrPos.symbol || 'UNKNOWN';
+    const account = txOrPos.accountIdentifier || 'unknown-account';
+    return `${account}|${instrument}`;
+  }
+
+  _pushOrphanClose(rawTrades, tx, quantity) {
+    if (!(quantity > 0)) return;
+    const closeFraction = tx.quantity > 0 ? quantity / tx.quantity : 1;
+    rawTrades.push({
+      symbol: tx.symbol,
+      side: tx.side,
+      quantity,
+      entryPrice: null,
+      exitPrice: tx.price,
+      entryTime: null,
+      exitTime: tx.time,
+      tradeDate: tx.time.split('T')[0],
+      commission: (tx.commission || 0) * closeFraction,
+      fees: (tx.fees || 0) * closeFraction,
+      pnl: tx.netAmount != null ? tx.netAmount * closeFraction : null,
+      broker: 'schwab',
+      instrumentType: tx.instrumentType,
+      optionType: tx.optionType,
+      strikePrice: tx.strikePrice,
+      expirationDate: tx.expirationDate,
+      underlyingSymbol: tx.underlyingSymbol,
+      matchingSymbol: tx.matchingSymbol,
+      cusip: tx.cusip,
+      accountIdentifier: tx.accountIdentifier,
+      roundTripId: 0, // No matching open - unique round-trip
+      executionData: [{
+        datetime: tx.time,
+        price: tx.price,
+        quantity,
+        side: tx.side,
+        type: 'exit',
+        orderId: tx.orderId
+      }]
+    });
+  }
+
   matchTransactions(transactions) {
     const rawTrades = [];
-    // Track open positions by symbol: { symbol: [{ qty, price, time, ... }] }
+    // Track open positions per account+symbol: { "****1234|AAPL": [{ qty, price, time, ... }] }
     const openPositions = {};
-    // Track round-trip IDs per symbol - increments each time position goes flat then re-opens
+    // Track round-trip IDs per account+symbol - increments each time position goes flat then re-opens
     const roundTripCounters = {};
 
     // Sort all transactions by time
@@ -539,15 +586,15 @@ class SchwabService {
 
     for (const tx of sorted) {
       const symbol = tx.symbol;
-      const positionKey = tx.matchingSymbol || symbol;
+      const positionKey = this._positionMatchKey(tx);
 
       // Handle transactions without positionEffect - try to infer from context
       let positionEffect = tx.positionEffect;
       if (!positionEffect) {
         // For TOS trades that might not have positionEffect, try to infer it
-        // If we have open positions for this symbol, assume it's closing
+        // If we have open positions for this symbol *in this account*, assume it's closing
         // Otherwise, assume it's opening
-        console.log(`[SCHWAB] Transaction without positionEffect: ${symbol} qty=${tx.quantity} price=${tx.price} - attempting to infer`);
+        console.log(`[SCHWAB] Transaction without positionEffect: ${symbol} qty=${tx.quantity} price=${tx.price} account=${tx.accountIdentifier || 'n/a'} - attempting to infer`);
 
         if (openPositions[positionKey] && openPositions[positionKey].length > 0) {
           positionEffect = 'CLOSING';
@@ -587,41 +634,10 @@ class SchwabService {
           roundTripId: roundTripCounters[positionKey]
         });
       } else if (positionEffect === 'CLOSING') {
-        // Match against open positions using FIFO
+        // Match against open positions using FIFO within the same account only
         if (!openPositions[positionKey] || openPositions[positionKey].length === 0) {
-          // No matching open - position was opened before sync window
-          // Use Schwab's netAmount for P&L
-          rawTrades.push({
-            symbol,
-            side: tx.side,
-            quantity: tx.quantity,
-            entryPrice: null,
-            exitPrice: tx.price,
-            entryTime: null,
-            exitTime: tx.time,
-            tradeDate: tx.time.split('T')[0],
-            commission: tx.commission || 0,
-            fees: tx.fees || 0,
-            pnl: tx.netAmount || null,
-            broker: 'schwab',
-            instrumentType: tx.instrumentType,
-            optionType: tx.optionType,
-            strikePrice: tx.strikePrice,
-            expirationDate: tx.expirationDate,
-            underlyingSymbol: tx.underlyingSymbol,
-            matchingSymbol: tx.matchingSymbol,
-            cusip: tx.cusip,
-            accountIdentifier: tx.accountIdentifier,
-            roundTripId: 0, // No matching open - unique round-trip
-            executionData: [{
-              datetime: tx.time,
-              price: tx.price,
-              quantity: tx.quantity,
-              side: tx.side,
-              type: 'exit',
-              orderId: tx.orderId
-            }]
-          });
+          // No matching open in this account - position was opened before sync window
+          this._pushOrphanClose(rawTrades, tx, tx.quantity);
           continue;
         }
 
@@ -691,6 +707,11 @@ class SchwabService {
           if (openPos.qty <= 0) {
             openPositions[positionKey].shift();
           }
+        }
+
+        // Close qty that exceeds same-account opens (opened before sync window)
+        if (remainingCloseQty > 0) {
+          this._pushOrphanClose(rawTrades, tx, remainingCloseQty);
         }
       }
     }
