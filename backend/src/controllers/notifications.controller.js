@@ -4,7 +4,17 @@ const { uuidv4 } = require('../utils/uuid');
 
 const LEGACY_NOTIFICATION_TYPES = new Set(['price_alert', 'trade_comment']);
 
+// Memoized: once the table exists it exists for the process lifetime, and the
+// polled unread-count endpoint was paying an information_schema round-trip per
+// call. A false result is NOT cached so a fresh install starts working as soon
+// as migrations create the table.
+let notificationsTableExistsMemo = false;
+
 async function notificationsTableExists() {
+  if (notificationsTableExistsMemo) {
+    return true;
+  }
+
   const result = await db.query(`
     SELECT EXISTS (
       SELECT FROM information_schema.tables
@@ -13,7 +23,8 @@ async function notificationsTableExists() {
     ) AS exists
   `);
 
-  return result.rows[0]?.exists === true;
+  notificationsTableExistsMemo = result.rows[0]?.exists === true;
+  return notificationsTableExistsMemo;
 }
 
 // Store active SSE connections with metadata
@@ -811,7 +822,7 @@ const notificationsController = {
   async registerDeviceToken(req, res, next) {
     try {
       const userId = req.user.id;
-      const { device_token, platform, environment } = req.body;
+      const { device_token, platform, environment, bundle_id } = req.body;
       
       if (!device_token || !platform) {
         return res.status(400).json({
@@ -835,25 +846,38 @@ const notificationsController = {
           error: 'Environment must be development or production for iOS'
         });
       }
+
+      const normalizedPlatform = platform.toLowerCase();
+      const configuredBundleId = process.env.APNS_BUNDLE_ID || 'com.tradetally.ios';
+      if (normalizedPlatform === 'ios' && bundle_id && bundle_id !== configuredBundleId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Bundle ID does not match the configured iOS application'
+        });
+      }
+
+      const normalizedEnvironment = environment?.toLowerCase() || 'production';
+      const normalizedBundleId = normalizedPlatform === 'ios' ? configuredBundleId : null;
       
       const query = `
-        INSERT INTO device_tokens (id, user_id, device_token, platform, environment, active)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO device_tokens (id, user_id, device_token, platform, environment, bundle_id, active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (user_id, device_token) DO UPDATE SET
           platform = $4,
           environment = $5,
-          active = $6,
+          bundle_id = $6,
+          active = $7,
           updated_at = CURRENT_TIMESTAMP
-        RETURNING id, device_token, platform, environment, created_at
+        RETURNING id, device_token, platform, environment, bundle_id, created_at
       `;
       
       const tokenId = uuidv4();
       const result = await db.query(query, [
-        tokenId, userId, device_token, platform.toLowerCase(), 
-        environment?.toLowerCase() || 'production', true
+        tokenId, userId, device_token, normalizedPlatform,
+        normalizedEnvironment, normalizedBundleId, true
       ]);
       
-      console.log(`Device token registered for user ${userId}: ${platform} (${environment || 'production'})`);
+      console.log(`Device token registered for user ${userId}: ${normalizedPlatform} (${normalizedEnvironment})`);
       
       res.json({
         success: true,
@@ -1030,7 +1054,7 @@ const notificationsController = {
           details: result
         });
       } else {
-        res.json({
+        res.status(result.reason === 'no_active_devices' ? 404 : 502).json({
           success: false,
           message: `Test notification failed: ${result.reason || result.error}`,
           details: result

@@ -1,486 +1,299 @@
 <template>
   <div class="card">
     <div class="card-body">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-medium text-gray-900 dark:text-white">Trade Visualization</h3>
-        <div v-if="source" class="flex items-center space-x-2">
-          <span v-if="isOptionTrade" class="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
-            Options Trade
+      <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 class="text-lg font-medium text-gray-900 dark:text-white">Trade Visualization</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Review price action, execution timing, indicators, and your own annotations.
+          </p>
+        </div>
+        <div v-if="chartData" class="flex flex-wrap items-center gap-2">
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            {{ intervalLabel }}<template v-if="chartData.interval !== 'daily'"> · {{ timezoneLabel }}</template>
           </span>
-          <span class="text-xs px-2 py-1 rounded-full" :class="getSourceBadgeClass(source)">
-            {{ getSourceLabel(source) }}
+          <span
+            v-if="chartData.trade?.instrumentType === 'option'"
+            class="rounded-full bg-primary-100 px-2 py-1 text-xs font-medium text-primary-800 dark:bg-primary-900/40 dark:text-primary-200"
+          >
+            Underlying price
+          </span>
+          <span
+            v-if="chartData.source"
+            class="rounded-full bg-primary-100 px-2 py-1 text-xs font-medium text-primary-800 dark:bg-primary-900/40 dark:text-primary-200"
+          >
+            {{ sourceLabel }}
           </span>
         </div>
       </div>
 
-      <!-- Pro upgrade prompt for free users when billing is enabled -->
       <ProUpgradePrompt
         v-if="requiresProUpgrade"
         variant="compact"
         description="Trade charts with high-precision candlestick data are available with a Pro subscription."
       />
 
-      <!-- Show Charts Button -->
-      <div v-else-if="!showCharts && !loading" class="text-center py-8">
-        <div class="mb-4">
-          <svg class="w-16 h-16 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-        </div>
-        <h4 class="text-lg font-medium text-gray-900 dark:text-white mb-2">
-          View Trade Charts
-        </h4>
-        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          See your entry and exit executions on daily and 5-minute candlestick charts
+      <div v-else-if="!showChart && !loading" class="rounded-lg border border-dashed border-gray-300 px-6 py-12 text-center dark:border-gray-600">
+        <PresentationChartLineIcon class="mx-auto h-12 w-12 text-gray-400" />
+        <h4 class="mt-4 text-lg font-medium text-gray-900 dark:text-white">Open interactive chart</h4>
+        <p class="mx-auto mt-2 max-w-lg text-sm text-gray-600 dark:text-gray-400">
+          Inspect the trade with editable trend lines, price levels, Fibonacci tools, moving averages, and execution markers.
         </p>
-        <button @click="loadCharts" class="btn-primary">
-          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-          Load Charts
+        <button type="button" class="btn-primary mt-5" @click="loadChart">
+          Load Chart
         </button>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
-          <span v-if="isBillingEnabled">Uses Finnhub API with high-precision intraday data</span>
-          <span v-else>Uses Finnhub (if configured) or Alpha Vantage for chart data</span>
+        <p class="mt-3 text-xs text-gray-500 dark:text-gray-500">
+          <span v-if="isBillingEnabled">Uses the configured high-precision market data provider.</span>
+          <span v-else>Uses the configured provider with Alpha Vantage as the daily-data fallback.</span>
         </p>
       </div>
 
       <div v-if="loading" class="flex justify-center py-16">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div class="h-12 w-12 animate-spin rounded-full border-b-2 border-primary-600"></div>
       </div>
 
-      <!-- Chart service not configured (no market-data API key) -->
-      <div v-else-if="showCharts && notConfigured" class="text-center py-16">
-        <div class="mb-4">
-          <svg class="w-16 h-16 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-        </div>
-        <p class="text-gray-600 dark:text-gray-400 mb-2">Chart data provider not configured</p>
-        <p class="text-sm text-gray-500 dark:text-gray-500 max-w-md mx-auto">
-          Configure a market-data API key (Finnhub or Alpha Vantage) to load daily and
-          5-minute charts. Contact your administrator to enable trade charts.
-        </p>
+      <div v-else-if="!isConfigured" class="rounded-lg border border-gray-200 py-14 text-center dark:border-gray-700">
+        <PresentationChartLineIcon class="mx-auto h-12 w-12 text-gray-400" />
+        <p class="mt-3 font-medium text-gray-900 dark:text-white">Chart service not configured</p>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Configure a supported market-data provider to enable trade charts.</p>
       </div>
 
-      <!-- Dual charts -->
-      <div v-else-if="showCharts" class="space-y-6">
-        <!-- Options trade explanation -->
-        <div v-if="isOptionTrade" class="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <div class="flex items-start space-x-2">
-            <svg class="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div class="text-sm text-blue-800 dark:text-blue-200">
-              <strong>Options Trade Chart:</strong> These charts show the <strong>underlying stock</strong> price movement. Arrows indicate execution <strong>timing</strong> (when you entered/exited), not option contract prices.
-            </div>
-          </div>
+      <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 px-5 py-10 text-center dark:border-red-800 dark:bg-red-900/20">
+        <p class="font-medium text-red-700 dark:text-red-300">{{ error }}</p>
+        <button
+          type="button"
+          class="btn-secondary mt-4 text-sm"
+          :disabled="error.includes('limit') || error.includes('not configured')"
+          @click="loadChart"
+        >
+          Try Again
+        </button>
+      </div>
+
+      <div v-else-if="showChart && chartData">
+        <div
+          v-if="chartData.trade?.instrumentType === 'option'"
+          class="mb-3 rounded-lg border border-primary-200 bg-primary-50 p-3 text-sm text-primary-900 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-100"
+        >
+          This chart displays the underlying security. Execution markers show option fill timing; contract prices remain in the execution table.
         </div>
 
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <!-- Daily chart -->
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">Daily</h4>
-            </div>
-            <div v-if="daily.error" class="flex flex-col items-center justify-center h-72 text-center px-4">
-              <svg class="w-10 h-10 mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <p class="text-sm text-gray-600 dark:text-gray-400">{{ daily.error }}</p>
-            </div>
-            <div v-show="!daily.error" ref="dailyContainer" class="w-full h-72"></div>
-          </div>
+        <KLineTradeChart
+          :chart-data="chartData"
+          :timezone="userTimezone || 'UTC'"
+          :selected-resolution="selectedResolution"
+          :available-resolutions="availableResolutions"
+          :resolution-loading="loading"
+          @resolution-change="selectResolution"
+        />
 
-          <!-- 5-minute chart -->
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">5-Minute</h4>
-            </div>
-            <div v-if="fiveMin.error" class="flex flex-col items-center justify-center h-72 text-center px-4">
-              <svg class="w-10 h-10 mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <p class="text-sm text-gray-600 dark:text-gray-400">{{ fiveMin.error }}</p>
-              <p v-if="fiveMin.premiumHint" class="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                5-minute intraday history requires a premium market-data plan.
-              </p>
-            </div>
-            <div v-show="!fiveMin.error" ref="fiveMinContainer" class="w-full h-72"></div>
-          </div>
-        </div>
-
-        <!-- Trade summary -->
-        <div v-if="tradeInfo" class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm border-t border-gray-200 dark:border-gray-700 pt-4">
-          <div>
+        <dl v-if="chartData.trade" class="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div class="rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
             <dt class="text-gray-500 dark:text-gray-400">Entry</dt>
-            <dd class="font-medium text-gray-900 dark:text-white">{{ formatCurrency(tradeInfo.entryPrice) }}</dd>
+            <dd class="mt-0.5 font-semibold text-gray-900 dark:text-white">{{ formatCurrency(chartData.trade.entryPrice) }}</dd>
           </div>
-          <div>
+          <div class="rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
             <dt class="text-gray-500 dark:text-gray-400">Exit</dt>
-            <dd class="font-medium text-gray-900 dark:text-white">{{ formatCurrency(tradeInfo.exitPrice) }}</dd>
+            <dd class="mt-0.5 font-semibold text-gray-900 dark:text-white">{{ formatCurrency(chartData.trade.exitPrice) }}</dd>
           </div>
-          <div>
-            <dt class="text-gray-500 dark:text-gray-400">P&L</dt>
-            <dd class="font-medium" :class="tradeInfo.pnl >= 0 ? 'text-green-600' : 'text-red-600'">
-              {{ formatCurrency(tradeInfo.pnl) }}
-            </dd>
+          <div class="rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
+            <dt class="text-gray-500 dark:text-gray-400">P&amp;L</dt>
+            <dd class="mt-0.5 font-semibold" :class="metricClass(chartData.trade.pnl)">{{ formatCurrency(chartData.trade.pnl) }}</dd>
           </div>
-          <div>
+          <div class="rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
             <dt class="text-gray-500 dark:text-gray-400">Return</dt>
-            <dd class="font-medium" :class="tradeInfo.pnlPercent >= 0 ? 'text-green-600' : 'text-red-600'">
-              {{ tradeInfo.pnlPercent >= 0 ? '+' : '' }}{{ formatNumber(tradeInfo.pnlPercent) }}%
-            </dd>
+            <dd class="mt-0.5 font-semibold" :class="metricClass(chartData.trade.pnlPercent)">{{ formatPercent(chartData.trade.pnlPercent) }}</dd>
           </div>
-        </div>
+        </dl>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onUnmounted, watch } from 'vue'
-import * as LightweightCharts from 'lightweight-charts'
+import { computed, onMounted, ref, watch } from 'vue'
+import { PresentationChartLineIcon } from '@heroicons/vue/24/outline'
 import api from '@/services/api'
-import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
-import { useAuthStore } from '@/stores/auth'
+import KLineTradeChart from '@/components/trades/KLineTradeChart.vue'
 import ProUpgradePrompt from '@/components/ProUpgradePrompt.vue'
+import { useAuthStore } from '@/stores/auth'
+import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
+import { useNotification } from '@/composables/useNotification'
+import { useUserTimezone } from '@/composables/useUserTimezone'
 
 const props = defineProps({
   tradeId: {
     type: [String, Number],
-    required: true
-  }
+    required: true,
+  },
 })
 
-const { formatCurrency, currencySymbol } = useCurrencyFormatter()
 const authStore = useAuthStore()
+const { formatCurrency } = useCurrencyFormatter()
+const { showError, showWarning } = useNotification()
+const { userTimezone, timezoneLabel } = useUserTimezone()
 
-const dailyContainer = ref(null)
-const fiveMinContainer = ref(null)
-
-const showCharts = ref(false)
 const loading = ref(false)
-const notConfigured = ref(false)
-const source = ref(null)
-const tradeInfo = ref(null)
-
-const daily = reactive({ data: null, error: null, premiumHint: false })
-const fiveMin = reactive({ data: null, error: null, premiumHint: false })
-
-// Non-reactive chart instances (LightweightCharts objects must not be proxied)
-let dailyChart = null
-let fiveMinChart = null
+const error = ref(null)
+const isConfigured = ref(true)
+const chartData = ref(null)
+const showChart = ref(false)
+const selectedResolution = ref('1')
 
 const userTier = computed(() => authStore.user?.tier || 'free')
 const isBillingEnabled = computed(() => authStore.user?.billingEnabled !== false)
-const isAdmin = computed(() => authStore.user?.role === 'admin' || authStore.user?.role === 'owner')
+const isAdmin = computed(() => ['admin', 'owner'].includes(authStore.user?.role))
 const requiresProUpgrade = computed(() => isBillingEnabled.value && userTier.value !== 'pro' && !isAdmin.value)
-const isOptionTrade = computed(() => tradeInfo.value?.instrumentType === 'option')
-
-const getSourceLabel = (s) => {
-  switch (s) {
-    case 'schwab': return 'Schwab'
-    case 'finnhub': return 'Finnhub'
-    case 'alphavantage': return 'Alpha Vantage'
-    case 'alphavantage_cache': return 'Alpha Vantage (cached)'
-    case 'coingecko': return 'CoinGecko'
-    default: return 'Market data'
+const dailyOnlySource = computed(() => {
+  const availableResolutions = chartData.value?.available_resolutions
+  if (Array.isArray(availableResolutions)) {
+    return !availableResolutions.some((resolution) => resolution !== 'D')
   }
+
+  return [
+    'alphavantage',
+    'alphavantage_cache',
+    'alphavantage_fallback',
+    'coingecko',
+  ].includes(chartData.value?.source) && !chartData.value?.fallback
+})
+const availableResolutions = computed(() => {
+  const resolutions = chartData.value?.available_resolutions
+  if (Array.isArray(resolutions)) return resolutions
+  return dailyOnlySource.value ? ['D'] : ['1', '5', '15', '60', 'D']
+})
+
+const intervalLabel = computed(() => {
+  const labels = {
+    '1min': '1 minute candles',
+    '5min': '5 minute candles',
+    '15min': '15 minute candles',
+    '1hour': '1 hour candles',
+    daily: '1 day candles',
+  }
+  return labels[chartData.value?.interval] || `${chartData.value?.interval || 'Daily'} candles`
+})
+
+const sourceLabel = computed(() => {
+  const labels = {
+    finnhub: 'Finnhub',
+    fmp: 'Financial Modeling Prep',
+    alphavantage: 'Alpha Vantage',
+    alphavantage_cache: 'Alpha Vantage cache',
+    alphavantage_fallback: 'Alpha Vantage fallback',
+    coingecko: 'CoinGecko',
+  }
+  return labels[chartData.value?.source] || 'Market data'
+})
+
+function metricClass(value) {
+  return Number(value) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
 }
 
-const getSourceBadgeClass = (s) => {
-  switch (s) {
-    case 'schwab': return 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200'
-    case 'finnhub': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-    case 'alphavantage':
-    case 'alphavantage_cache': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-    default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200'
-  }
+function formatPercent(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 'N/A'
+  return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`
 }
 
-const formatNumber = (num) => parseFloat(num || 0).toFixed(2)
-
-// Parse a stored datetime (UTC, as the rest of the app treats execution times)
-// into a Unix timestamp in seconds. Candle timestamps are true UTC epoch seconds
-// (provider `datetime`/1000) and LightweightCharts plots them in UTC, so markers
-// must use the same UTC instant — NOT the viewer's wall-clock — to land on the
-// correct candle.
-const parseDateTimeToTimestamp = (dateStr) => {
-  if (!dateStr) return null
-  const ms = Date.parse(dateStr)
-  if (Number.isNaN(ms)) return null
-  return Math.floor(ms / 1000)
+function resolutionForInterval(interval) {
+  return {
+    '1min': '1',
+    '5min': '5',
+    '15min': '15',
+    '1hour': '60',
+    daily: 'D',
+  }[interval] || 'D'
 }
 
-// Validate, dedupe and sort candles for LightweightCharts (which requires
-// strictly increasing, unique timestamps).
-const prepareCandles = (rawCandles) => {
-  if (!Array.isArray(rawCandles)) return []
-  const byTime = new Map()
-  for (const candle of rawCandles) {
-    const time = Number(candle.time)
-    const open = Number(candle.open)
-    const high = Number(candle.high)
-    const low = Number(candle.low)
-    const close = Number(candle.close)
-    if ([time, open, high, low, close].some((v) => isNaN(v))) continue
-    byTime.set(time, { time, open, high, low, close })
-  }
-  return Array.from(byTime.values()).sort((a, b) => a.time - b.time)
-}
-
-// Classify an execution as a buy (green entry-style arrow) or sell (red arrow).
-// Mirrors the backend P&L engine's action parsing: buy/bot/long ⇒ buy,
-// sell/sold/short/sld ⇒ sell. Brokers like Schwab store `side` as the position
-// direction ('long' on the opening fill, 'short' on the closing fill) with no
-// `action`, so a naive `includes('buy')` check misclassified every fill as a
-// SELL. Fall back to the entry/exit `type` combined with the trade side.
-const executionIsBuy = (ex, tradeSide) => {
-  const explicit = (ex.action || ex.side || '').toString().toLowerCase()
-  if (/\b(buy|bot|long)\b/.test(explicit)) return true
-  if (/\b(sell|sold|short|sld)\b/.test(explicit)) return false
-  const type = (ex.type || '').toString().toLowerCase()
-  if (type === 'entry') return tradeSide !== 'short'
-  if (type === 'exit') return tradeSide === 'short'
-  return tradeSide !== 'short'
-}
-
-// Build entry/exit markers from the trade's executions (preferred) or, when
-// no executions are available, from the entry/exit summary fields.
-const buildMarkers = (trade, candles, isDaily) => {
-  if (!trade || candles.length === 0) return []
-  const symbol = currencySymbol.value
-  const isOption = trade.instrumentType === 'option'
-  const tradeSide = (trade.side || '').toString().toLowerCase()
-
-  const utcDayKey = (epochSec) => {
-    const d = new Date(epochSec * 1000)
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-  }
-
-  // Snap a marker timestamp to a real candle. Daily candles are one per day, so
-  // an intraday execution's UTC instant can sit closer to the *next* day's
-  // candle — match by UTC calendar day instead. Intraday snaps to the nearest.
-  const snapToCandle = (ts) => {
-    if (ts == null) return null
-    if (isDaily) {
-      const day = utcDayKey(ts)
-      const sameDay = candles.find((c) => utcDayKey(c.time) === day)
-      if (sameDay) return sameDay
-    }
-    return candles.reduce((closest, c) =>
-      Math.abs(c.time - ts) < Math.abs(closest.time - ts) ? c : closest
-    )
-  }
-
-  const markers = []
-  const addMarker = (ts, price, isBuy, qty) => {
-    const candle = snapToCandle(ts)
-    if (!candle) return
-    const priceLabel = isFinite(price) ? ` @ ${symbol}${formatNumber(price)}` : ''
-    const text = isOption
-      ? `${isBuy ? 'BUY' : 'SELL'}${qty ? ` ${qty}x` : ''}`
-      : `${isBuy ? 'BUY' : 'SELL'}${priceLabel}`
-    markers.push({
-      time: candle.time,
-      position: isBuy ? 'belowBar' : 'aboveBar',
-      color: isBuy ? '#10b981' : '#ef4444',
-      shape: isBuy ? 'arrowUp' : 'arrowDown',
-      text,
-      size: 2
-    })
-  }
-
-  const executions = Array.isArray(trade.executions) ? trade.executions : []
-
-  // Grouped/round-trip executions carry both an entry and an exit on one row;
-  // emit a marker for each leg. Fill-based executions carry one fill per row.
-  const isGrouped = executions.some((ex) => ex && (
-    ex.entryPrice !== undefined || ex.entry_price !== undefined ||
-    ex.exitPrice !== undefined || ex.exit_price !== undefined
-  ))
-
-  if (executions.length > 0 && isGrouped) {
-    const entryIsBuy = tradeSide !== 'short'
-    executions.forEach((ex) => {
-      if (!ex) return
-      const qty = ex.quantity
-      const entryTs = parseDateTimeToTimestamp(ex.entryTime || ex.entry_time)
-      if (entryTs != null) addMarker(entryTs, parseFloat(ex.entryPrice ?? ex.entry_price), entryIsBuy, qty)
-      const exitTs = parseDateTimeToTimestamp(ex.exitTime || ex.exit_time)
-      if (exitTs != null) addMarker(exitTs, parseFloat(ex.exitPrice ?? ex.exit_price), !entryIsBuy, qty)
-    })
-  } else if (executions.length > 0) {
-    executions.forEach((ex) => {
-      if (!ex) return
-      const ts = parseDateTimeToTimestamp(ex.datetime || ex.entryTime || ex.entry_time || ex.exitTime || ex.exit_time)
-      if (ts == null) return
-      const price = parseFloat(ex.price ?? ex.entryPrice ?? ex.entry_price ?? ex.exitPrice ?? ex.exit_price)
-      addMarker(ts, price, executionIsBuy(ex, tradeSide), ex.quantity)
-    })
-  } else {
-    const isShort = tradeSide === 'short'
-    const entryTs = parseDateTimeToTimestamp(trade.entryTime || trade.entryDate)
-    if (entryTs != null) addMarker(entryTs, parseFloat(trade.entryPrice), !isShort, trade.quantity)
-    const exitTs = parseDateTimeToTimestamp(trade.exitTime)
-    if (exitTs != null) addMarker(exitTs, parseFloat(trade.exitPrice), isShort, trade.quantity)
-  }
-
-  // LightweightCharts requires markers in ascending time order
-  return markers.sort((a, b) => a.time - b.time)
-}
-
-const renderChart = (container, data) => {
-  if (!container || !data) return null
-  const candles = prepareCandles(data.candles)
-  if (candles.length === 0) return null
-
-  const isDark = document.documentElement.classList.contains('dark')
-  const chart = LightweightCharts.createChart(container, {
-    width: container.clientWidth,
-    height: 288,
-    layout: {
-      background: { type: 'solid', color: 'transparent' },
-      textColor: isDark ? '#e5e7eb' : '#111827'
-    },
-    grid: {
-      vertLines: { color: isDark ? '#374151' : '#e5e7eb' },
-      horzLines: { color: isDark ? '#374151' : '#e5e7eb' }
-    },
-    timeScale: {
-      borderColor: isDark ? '#4b5563' : '#d1d5db',
-      timeVisible: data.resolution !== 'D',
-      secondsVisible: false
-    },
-    rightPriceScale: {
-      borderColor: isDark ? '#4b5563' : '#d1d5db'
-    }
-  })
-
-  const series = chart.addCandlestickSeries({
-    upColor: '#10b981',
-    downColor: '#ef4444',
-    borderUpColor: '#10b981',
-    borderDownColor: '#ef4444',
-    wickUpColor: '#10b981',
-    wickDownColor: '#ef4444'
-  })
-
-  series.setData(candles)
-
-  const isDaily = data.resolution === 'D' || data.type === 'daily' || data.interval === 'daily'
-  const markers = buildMarkers(data.trade, candles, isDaily)
-  if (markers.length > 0) {
-    try {
-      series.setMarkers(markers)
-    } catch (err) {
-      console.warn('Failed to set chart markers:', err)
-    }
-  }
-
-  chart.timeScale().fitContent()
-
-  const handleResize = () => {
-    if (container) chart.applyOptions({ width: container.clientWidth })
-  }
-  window.addEventListener('resize', handleResize)
-  chart._resizeHandler = handleResize
-
-  return chart
-}
-
-const destroyChart = (chart) => {
-  if (!chart) return
-  try {
-    if (chart._resizeHandler) window.removeEventListener('resize', chart._resizeHandler)
-    chart.remove()
-  } catch (err) {
-    console.warn('Error cleaning up chart:', err)
-  }
-}
-
-// Map an API error to a user-facing per-chart message; flags global states.
-const describeError = (err, panel) => {
-  const status = err.response?.status
-  const apiError = err.response?.data?.error
-  if (status === 503) {
-    notConfigured.value = true
-    return apiError || 'Chart service not configured'
-  }
-  if (status === 429) {
-    return 'Market-data rate limit reached. Try again shortly.'
-  }
-  if (status === 404) {
-    return apiError || 'No chart data available for this symbol.'
-  }
-  // Alpha Vantage premium gating surfaces as a generic failure for intraday
-  if (panel === '5min') {
-    fiveMin.premiumHint = true
-  }
-  return apiError || 'Unable to load chart data.'
-}
-
-const fetchResolution = async (resolution) => {
-  try {
-    const res = await api.get(`/trades/${props.tradeId}/chart-data`, { params: { resolution } })
-    return { ok: true, data: res.data }
-  } catch (err) {
-    return { ok: false, err }
-  }
-}
-
-const applyResult = (panel, result, key) => {
-  if (result.ok) {
-    panel.data = result.data
-    panel.error = null
-    if (result.data?.source) source.value = result.data.source
-    if (result.data?.trade) tradeInfo.value = result.data.trade
-    if (!result.data?.candles || result.data.candles.length === 0) {
-      panel.error = 'No candles returned for this symbol/timeframe.'
-    }
-  } else {
-    panel.error = describeError(result.err, key)
-  }
-}
-
-const loadCharts = async () => {
-  showCharts.value = true
+async function fetchChartData() {
   loading.value = true
-  notConfigured.value = false
-  daily.error = null
-  fiveMin.error = null
-  fiveMin.premiumHint = false
+  error.value = null
+  isConfigured.value = true
 
-  const [dailyRes, fiveMinRes] = await Promise.all([
-    fetchResolution('daily'),
-    fetchResolution('5min')
-  ])
+  try {
+    const response = await api.get(`/trades/${props.tradeId}/chart-data`, {
+      params: { resolution: selectedResolution.value },
+    })
+    chartData.value = response.data
+    selectedResolution.value = resolutionForInterval(response.data.interval)
+    rememberChartState()
+  } catch (requestError) {
+    const status = requestError.response?.status
+    const responseError = requestError.response?.data?.error
 
-  applyResult(daily, dailyRes, 'daily')
-  applyResult(fiveMin, fiveMinRes, '5min')
-
-  loading.value = false
-
-  if (notConfigured.value) return
-
-  await nextTick()
-  if (!daily.error) dailyChart = renderChart(dailyContainer.value, daily.data)
-  if (!fiveMin.error) fiveMinChart = renderChart(fiveMinContainer.value, fiveMin.data)
+    if (status === 403 && requestError.response?.data?.requiresPro) {
+      error.value = responseError || 'Trade charts require Pro access.'
+    } else if (status === 503) {
+      isConfigured.value = false
+      error.value = responseError || 'Chart service not configured'
+      showError('Chart Service Unavailable', 'Configure a supported market-data provider to enable chart visualization.')
+    } else if (status === 429) {
+      error.value = responseError || 'Chart API limit reached'
+      showWarning('Chart API Limit Reached', 'Please wait before requesting chart data again.')
+    } else {
+      error.value = responseError || 'Failed to load chart data'
+      showWarning('Chart Data Unavailable', requestError.response?.data?.message || error.value)
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
-// Re-render on theme change so colors match light/dark mode
-watch(() => document.documentElement.classList.contains('dark'), async () => {
-  if (!showCharts.value || notConfigured.value) return
-  await nextTick()
-  destroyChart(dailyChart); dailyChart = null
-  destroyChart(fiveMinChart); fiveMinChart = null
-  if (!daily.error) dailyChart = renderChart(dailyContainer.value, daily.data)
-  if (!fiveMin.error) fiveMinChart = renderChart(fiveMinContainer.value, fiveMin.data)
-})
+function chartStateStorageKey() {
+  return `trade_chart_loaded:${props.tradeId}`
+}
 
-onUnmounted(() => {
-  destroyChart(dailyChart)
-  destroyChart(fiveMinChart)
-})
+function rememberChartState() {
+  try {
+    sessionStorage.setItem(chartStateStorageKey(), selectedResolution.value)
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+}
+
+function restoredResolution() {
+  try {
+    const resolution = sessionStorage.getItem(chartStateStorageKey())
+    return ['1', '5', '15', '60', 'D'].includes(resolution) ? resolution : null
+  } catch {
+    return null
+  }
+}
+
+function restoreChart() {
+  const resolution = restoredResolution()
+  if (!resolution || requiresProUpgrade.value) return
+  selectedResolution.value = resolution
+  showChart.value = true
+  fetchChartData()
+}
+
+function loadChart() {
+  showChart.value = true
+  rememberChartState()
+  fetchChartData()
+}
+
+function selectResolution(resolution) {
+  if (loading.value || resolution === selectedResolution.value) return
+  if (dailyOnlySource.value && resolution !== 'D') return
+  selectedResolution.value = resolution
+  rememberChartState()
+  fetchChartData()
+}
+
+watch(
+  () => props.tradeId,
+  () => {
+    chartData.value = null
+    error.value = null
+    isConfigured.value = true
+    showChart.value = false
+    selectedResolution.value = '1'
+    queueMicrotask(restoreChart)
+  }
+)
+
+onMounted(restoreChart)
 </script>

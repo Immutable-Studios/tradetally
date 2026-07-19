@@ -169,6 +169,17 @@ describe('TradeQueries.getAnalytics characterization', () => {
     });
   });
 
+  test('market_sessions uses the shared New York market-hours filter', async () => {
+    await TradeQueries.getAnalytics('user-1', { market_sessions: ['regular'] });
+
+    const values = captureValues();
+    const sql = captureSql();
+    expect(values).toEqual(['user-1', ['regular']]);
+    expect(sql).toContain("t.entry_time AT TIME ZONE 'America/New_York'");
+    expect(sql).toContain('BETWEEN 1 AND 5');
+    expect(sql).toContain('END = ANY($2::text[])');
+  });
+
   describe('symbol filtering', () => {
     test('prefix mode: ILIKE plus CUSIP fallback (unified with findByUser)', async () => {
       await TradeQueries.getAnalytics('user-1', { symbol: 'aapl' });
@@ -458,6 +469,22 @@ describe('TradeQueries.getAnalytics characterization', () => {
       expect(dailyWinRateSql).toContain('FROM positions');
       // Grouped positions use the net-P&L breakeven, not the per-leg tick tolerance.
       expect(dailyWinRateSql).toContain('ROUND(pnl::numeric, 2)');
+    });
+
+    test('grouping on: dollar tolerance uses combined gross P&L', async () => {
+      User.getSettings.mockResolvedValueOnce({
+        statistics_calculation: 'average',
+        analytics_position_grouping: true,
+        breakeven_tolerance_mode: 'dollars',
+        breakeven_tolerance_dollars: 10
+      });
+      await TradeQueries.getAnalytics('user-1', {});
+
+      const analyticsSql = sqlAt(1);
+      const dailyWinRateSql = sqlAt(4);
+      expect(analyticsSql).toContain('ABS((trade_pnl + trade_costs)) <= (10)');
+      expect(dailyWinRateSql).toContain('as gross_pnl');
+      expect(dailyWinRateSql).toContain('ABS(gross_pnl) <= (10)');
     });
 
     test('grouping on: symbol breakdown rolls legs up under the underlying', async () => {

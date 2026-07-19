@@ -1,6 +1,5 @@
 const User = require('../models/User');
-const jwt = require('jsonwebtoken');
-const { generateToken, TOKEN_PURPOSES, verifyJwtToken } = require('../middleware/auth');
+const { generateToken, TOKEN_PURPOSES, verifyJwtToken, clearAuthUserCache } = require('../middleware/auth');
 const crypto = require('crypto');
 const EmailService = require('../services/emailService');
 const bcrypt = require('bcryptjs');
@@ -22,10 +21,13 @@ function isEmailConfigured() {
   return EmailService.isConfigured();
 }
 
-// Check if detailed error messages are enabled (for self-hosted setups)
+// Check if detailed error messages are enabled (for self-hosted setups).
+// Explicit DETAILED_AUTH_ERRORS=true is honored in any environment (the Docker
+// image runs NODE_ENV=production, and self-hosters need it for diagnostics);
+// the no-email-config fallback stays dev-only.
 function useDetailedErrors() {
-  return process.env.NODE_ENV !== 'production' &&
-    (process.env.DETAILED_AUTH_ERRORS === 'true' || !isEmailConfigured());
+  return process.env.DETAILED_AUTH_ERRORS === 'true' ||
+    (process.env.NODE_ENV !== 'production' && !isEmailConfigured());
 }
 
 // Get registration mode from environment
@@ -54,12 +56,7 @@ function getBillingEnabled() {
   return process.env.BILLING_ENABLED === 'true';
 }
 
-function maskEmail(email) {
-  if (!email || !email.includes('@')) return '***';
-  const [localPart, domain] = email.split('@');
-  if (localPart.length <= 2) return `**@${domain}`;
-  return `${localPart.slice(0, 2)}***@${domain}`;
-}
+const maskEmail = require('../utils/maskEmail');
 
 function sendVerificationEmailInBackground(email, token) {
   setImmediate(async () => {
@@ -331,6 +328,7 @@ const authController = {
       const detailedErrors = useDetailedErrors();
 
       if (!user || !user.is_active) {
+        console.warn(`[AUTH] Login failed: ${!user ? 'no account for submitted email' : 'account is deactivated'}`);
         return res.status(401).json({
           error: detailedErrors ? 'No account found with this email address' : 'Invalid credentials'
         });
@@ -343,6 +341,7 @@ const authController = {
 
       const isValid = await User.verifyPassword(user, password);
       if (!isValid) {
+        console.warn(`[AUTH] Login failed: incorrect password for user ${user.username}`);
         const nowLocked = await accountLockout.recordFailedAttempt(user);
         if (nowLocked) {
           return res.status(423).json({ error: accountLockout.LOCKED_MESSAGE, accountLocked: true });
@@ -450,22 +449,21 @@ const authController = {
       let decoded;
       try {
         decoded = verifyJwtToken(tempToken, { requiredPurpose: TOKEN_PURPOSES.PRE_2FA });
-      } catch (error) {
-        try {
-          // Accept legacy temp tokens minted before token-purpose enforcement.
-          const legacyDecoded = jwt.verify(tempToken, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-          if (legacyDecoded.purpose) {
-            throw error;
-          }
-          decoded = legacyDecoded;
-        } catch (_) {
-          return res.status(401).json({ error: 'Invalid or expired temporary token' });
-        }
+      } catch (_) {
+        return res.status(401).json({ error: 'Invalid or expired temporary token' });
       }
 
       const user = await User.findById(decoded.id || decoded.userId);
-      if (!user || !user.two_factor_enabled) {
+      if (!user || !user.two_factor_enabled ||
+          decoded.session_version !== Number(user.session_version || 0)) {
         return res.status(400).json({ error: 'Invalid request' });
+      }
+
+      if (getRegistrationMode() === 'approval' && !user.admin_approved) {
+        return res.status(403).json({
+          error: 'Your account is pending admin approval.',
+          requiresApproval: true
+        });
       }
 
       // Verify 2FA code
@@ -543,6 +541,9 @@ const authController = {
 
   async logout(req, res, next) {
     try {
+      await User.revokeSessions(req.user.id);
+      await refreshTokenService.revokeUserTokens(req.user.id, 'web_logout');
+      clearAuthUserCache(req.user.id);
       clearAuthCookies(req, res);
 
       res.json({ message: 'Logout successful' });
@@ -553,8 +554,12 @@ const authController = {
 
   async getMe(req, res, next) {
     try {
-      const user = await User.findById(req.user.id);
-      const settings = await User.getSettings(req.user.id);
+      // Fetch fresh user (bypasses the auth memo so profile edits reflect
+      // immediately) and settings in parallel - they are independent queries.
+      const [user, settings] = await Promise.all([
+        User.findById(req.user.id),
+        User.getSettings(req.user.id)
+      ]);
       const onboardingCompleted = !!(settings && settings.onboarding_completed_at);
 
       res.json({
@@ -661,6 +666,8 @@ const authController = {
 
       const hashedPassword = await bcrypt.hash(password, 10);
       await User.updatePassword(user.id, hashedPassword);
+      await refreshTokenService.revokeUserTokens(user.id, 'password_reset');
+      clearAuthUserCache(user.id);
 
       res.json({ message: 'Password has been reset successfully' });
     } catch (error) {

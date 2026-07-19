@@ -12,6 +12,7 @@
 const db = require('../config/database');
 const Trade = require('../models/Trade');
 const { getUserTimezone } = require('../utils/timezone');
+const { buildTradeDateRangeClause } = require('../utils/tradeDateFilter');
 
 async function timedDbQuery(label, query, values = []) {
   const startedAt = Date.now();
@@ -23,6 +24,52 @@ async function timedDbQuery(label, query, values = []) {
     console.warn(`[PERF] ${label} failed after ${Date.now() - startedAt}ms: ${error.message}`);
     throw error;
   }
+}
+
+// Heavy JSONB columns excluded from the trade LIST query. They can be
+// hundreds of KB per page of 50 rows and nothing on the list path reads them:
+// the web list, iOS, and Android decode none of these, and the detail view
+// (getTrade -> Trade.findById) still returns the full row.
+//
+// Deliberately KEPT in the list: `executions` (remaining-open-quantity calc in
+// enrichOpenTradePnL + decoded by iOS) and `quality_metrics` (setupQuality).
+// The list's news badge only needs a count, so findByUser emits a computed
+// `news_event_count` instead of the news_events payload.
+const TRADE_LIST_EXCLUDED_COLUMNS = new Set([
+  'news_events',
+  'take_profit_targets',
+  'risk_level_history',
+  'target_hit_analysis',
+  'updated_targets',
+  'classification_metadata'
+]);
+
+// Column list is discovered from information_schema so migrations that add
+// columns don't silently drop them from list responses. Short TTL because
+// ensurePostExitSchema can add columns at runtime.
+let tradeListColumnsCache = null;
+
+async function getTradeListSelectColumns() {
+  const now = Date.now();
+  if (tradeListColumnsCache && tradeListColumnsCache.expiresAt > now) {
+    return tradeListColumnsCache.select;
+  }
+
+  const result = await db.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'trades'
+    ORDER BY ordinal_position
+  `);
+
+  const select = result.rows
+    .map(row => row.column_name)
+    .filter(column => !TRADE_LIST_EXCLUDED_COLUMNS.has(column))
+    .map(column => `t."${column}"`)
+    .join(', ');
+
+  tradeListColumnsCache = { select, expiresAt: now + 5 * 60 * 1000 };
+  return select;
 }
 
 function futuresRootSql(alias) {
@@ -172,18 +219,11 @@ class TradeQueries {
       paramCount++;
     }
 
-    if (filters.startDate && filters.endDate) {
-      whereClause += ` AND ((t.trade_date >= $${paramCount} AND t.trade_date <= $${paramCount + 1}) OR (t.exit_time::date >= $${paramCount} AND t.exit_time::date <= $${paramCount + 1}))`;
-      values.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    } else if (filters.startDate) {
-      whereClause += ` AND (t.trade_date >= $${paramCount} OR t.exit_time::date >= $${paramCount})`;
-      values.push(filters.startDate);
-      paramCount++;
-    } else if (filters.endDate) {
-      whereClause += ` AND (t.trade_date <= $${paramCount} OR t.exit_time::date <= $${paramCount})`;
-      values.push(filters.endDate);
-      paramCount++;
+    const dateRange = buildTradeDateRangeClause(filters, paramCount);
+    if (dateRange.clause) {
+      whereClause += dateRange.clause;
+      dateRange.params.forEach(v => values.push(v));
+      paramCount += dateRange.params.length;
     }
 
     if (filters.exitStartDate) {
@@ -299,9 +339,9 @@ class TradeQueries {
 
     // Breakeven is judged on GROSS P&L (price only), so a trade scratched at
     // entry isn't miscounted as a loss purely because of commissions/fees. The
-    // per-user tolerance (in ticks) widens "breakeven" to gross P&L within
-    // +/- N ticks, scaled per-instrument. Wins/losses are decided by NET P&L
-    // among the non-breakeven trades.
+    // per-user tolerance widens "breakeven" either by a fixed dollar amount or
+    // by N ticks scaled per instrument. Wins/losses are decided by NET P&L among
+    // the non-breakeven trades.
     if (filters.pnlType) {
       const { getBreakevenToleranceConfig, breakevenPredicate } = require('../utils/breakeven');
       const config = filters.breakevenToleranceConfig !== undefined
@@ -330,6 +370,22 @@ class TradeQueries {
       filters.daysOfWeek.forEach(d => values.push(d));
       values.push(userTimezone);
       paramCount += filters.daysOfWeek.length + 1;
+    }
+
+    if (filters.market_sessions && filters.market_sessions.length > 0) {
+      const allowedSessions = ['pre_market', 'regular', 'post_market'];
+      const marketSessions = filters.market_sessions.filter(session => allowedSessions.includes(session));
+
+      if (marketSessions.length > 0) {
+        whereClause += ` AND extract(isodow from (t.entry_time AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5`;
+        whereClause += ` AND CASE
+          WHEN (t.entry_time AT TIME ZONE 'America/New_York')::time < TIME '09:30:00' THEN 'pre_market'
+          WHEN (t.entry_time AT TIME ZONE 'America/New_York')::time < TIME '16:00:00' THEN 'regular'
+          ELSE 'post_market'
+        END = ANY($${paramCount}::text[])`;
+        values.push(marketSessions);
+        paramCount++;
+      }
     }
 
     if (filters.instrumentTypes && filters.instrumentTypes.length > 0) {
@@ -427,9 +483,11 @@ class TradeQueries {
       paramCount++;
     }
 
+    const listColumns = await getTradeListSelectColumns();
+
     const mainQuery = `
-      SELECT t.*,
-        t.strategy, t.setup,
+      SELECT ${listColumns},
+        CASE WHEN jsonb_typeof(t.news_events) = 'array' THEN jsonb_array_length(t.news_events) ELSE 0 END as news_event_count,
         pm.current_price,
         pm.last_updated as current_price_updated_at,
         array_agg(DISTINCT ta.file_url) FILTER (WHERE ta.id IS NOT NULL) as attachment_urls,
@@ -465,10 +523,10 @@ class TradeQueries {
     console.log('Getting analytics for user:', userId, 'with filters:', filters);
 
     const User = require('../models/User');
-    const { normalizeConfig, breakevenPredicate } = require('../utils/breakeven');
-    const { POSITION_GROUP_KEY, GROUPED_BREAKEVEN } = require('../utils/positionGrouping');
+    const { configFromSettings, breakevenPredicate, groupedBreakevenPredicate } = require('../utils/breakeven');
+    const { POSITION_GROUP_KEY } = require('../utils/positionGrouping');
     let useMedian = false;
-    let breakevenConfig = { default: 0, byUnderlying: {} };
+    let breakevenConfig = { mode: 'ticks', default: 0, byUnderlying: {} };
     // Whole-trade win rate (issue #339): when the profile setting is on, the
     // completed_trades CTE collapses multi-leg positions opened together into a
     // single trade so the headline win rate / counts / profit factor are
@@ -481,10 +539,7 @@ class TradeQueries {
       const userSettings = await User.getSettings(userId);
       useMedian = userSettings?.statistics_calculation === 'median';
       groupByPosition = userSettings?.analytics_position_grouping === true;
-      breakevenConfig = normalizeConfig({
-        default: userSettings?.breakeven_tolerance_ticks,
-        byUnderlying: userSettings?.breakeven_tolerance_ticks_by_underlying
-      });
+      breakevenConfig = configFromSettings(userSettings);
       const stopLossDollars = parseFloat(userSettings?.default_stop_loss_dollars);
       if (userSettings?.default_stop_loss_type === 'dollar' && isFinite(stopLossDollars) && stopLossDollars > 0) {
         dollarRisk = stopLossDollars;
@@ -502,11 +557,13 @@ class TradeQueries {
 
     // Breakeven predicates: one over the completed_trades CTE aliases
     // (trade_pnl / trade_costs), one over the raw columns used by the daily query.
-    // In position-grouping mode the per-leg tick tolerance no longer applies to a
-    // combined position, so a grouped trade is breakeven only when its net P&L
-    // (trade_pnl) rounds to zero.
+    // In position-grouping mode tick tolerance preserves the exact-net rule;
+    // dollar tolerance applies to the combined position's gross P&L.
     const beCte = groupByPosition
-      ? { is: '(ROUND(trade_pnl::numeric, 2) = 0)', isNot: '(ROUND(trade_pnl::numeric, 2) <> 0)' }
+      ? groupedBreakevenPredicate({
+          gross: '(trade_pnl + trade_costs)',
+          net: 'trade_pnl'
+        }, breakevenConfig)
       : breakevenPredicate({
           gross: '(trade_pnl + trade_costs)',
           tickSize: 'tick_size',
@@ -520,6 +577,10 @@ class TradeQueries {
       pointValue: 'point_value',
       quantity: 'quantity',
       underlying: 'underlying_asset'
+    }, breakevenConfig);
+    const beGroupedDaily = groupedBreakevenPredicate({
+      gross: 'gross_pnl',
+      net: 'pnl'
     }, breakevenConfig);
 
     const executionCountQuery = `
@@ -772,30 +833,31 @@ class TradeQueries {
       timedDbQuery('analytics.dailyWinRateQuery', groupByPosition ? `
         -- Whole-trade mode: wins/losses counted per position, not per leg, so
         -- the Daily Win Rate & P/R Ratio widget matches the headline win rate.
-        -- Grouped positions use the net-P&L breakeven (rounds to zero) since
-        -- the per-leg tick tolerance doesn't apply to a combined position.
+        -- Tick mode uses exact net P&L for grouped positions; dollar mode uses
+        -- the configured range around combined gross P&L.
         WITH positions AS (
           SELECT
             MIN(trade_date) as trade_date,
-            SUM(COALESCE(pnl, 0)) as pnl
+            SUM(COALESCE(pnl, 0)) as pnl,
+            SUM(COALESCE(pnl, 0) + COALESCE(commission, 0) + COALESCE(fees, 0)) as gross_pnl
           FROM trades t
           ${whereClause}
           GROUP BY ${POSITION_GROUP_KEY}
         )
         SELECT
           trade_date,
-          COUNT(*) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl > 0) as wins,
-          COUNT(*) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl < 0) as losses,
-          COUNT(*) FILTER (WHERE ${GROUPED_BREAKEVEN.is}) as breakeven,
+          COUNT(*) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl > 0) as wins,
+          COUNT(*) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl < 0) as losses,
+          COUNT(*) FILTER (WHERE ${beGroupedDaily.is}) as breakeven,
           COUNT(*) as total_trades,
           CASE
-            WHEN COUNT(*) > 0 THEN ROUND((COUNT(*) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl > 0)::decimal / COUNT(*)::decimal) * 100, 2)
+            WHEN COUNT(*) > 0 THEN ROUND((COUNT(*) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl > 0)::decimal / COUNT(*)::decimal) * 100, 2)
             ELSE 0
           END as win_rate,
           CASE
-            WHEN AVG(pnl) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl < 0) IS NULL THEN
-              CASE WHEN AVG(pnl) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl > 0) IS NOT NULL THEN 999.99 ELSE 0 END
-            ELSE ROUND(ABS(AVG(pnl) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl > 0) / AVG(pnl) FILTER (WHERE ${GROUPED_BREAKEVEN.isNot} AND pnl < 0))::numeric, 2)
+            WHEN AVG(pnl) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl < 0) IS NULL THEN
+              CASE WHEN AVG(pnl) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl > 0) IS NOT NULL THEN 999.99 ELSE 0 END
+            ELSE ROUND(ABS(AVG(pnl) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl > 0) / AVG(pnl) FILTER (WHERE ${beGroupedDaily.isNot} AND pnl < 0))::numeric, 2)
           END as pl_ratio
         FROM positions
         GROUP BY trade_date

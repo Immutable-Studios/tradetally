@@ -77,6 +77,14 @@
               >
                 {{ trade.side }}
               </span>
+              <!-- Grouped multi-leg position (whole-trade grouping enabled) -->
+              <span
+                v-if="trade.leg_count > 1"
+                class="text-xs px-1.5 py-0.5 rounded font-medium bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-400"
+                title="Grouped multi-leg position"
+              >
+                {{ trade.leg_count }} legs
+              </span>
             </div>
             <div class="text-sm text-gray-500 dark:text-gray-400">
               {{ formatDateWithTime(trade) }}
@@ -99,7 +107,9 @@
             <div
               :class="[
                 'text-sm',
-                parseFloat(trade.pnl_percent) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                trade.pnl_percent == null
+                  ? 'text-gray-400 dark:text-gray-500'
+                  : parseFloat(trade.pnl_percent) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
               ]"
             >
               {{ formatPercent(trade.pnl_percent) }}
@@ -160,7 +170,8 @@
 </template>
 
 <script setup>
-import { format } from 'date-fns'
+import { formatTradeDate } from '@/utils/date'
+import { formatPercent as formatPercentBase } from '@/utils/formatters'
 import { useUserTimezone } from '@/composables/useUserTimezone'
 import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
 
@@ -194,11 +205,7 @@ function selectTrade(trade) {
 
 function formatDate(dateString) {
   if (!dateString) return ''
-  try {
-    return format(new Date(dateString), 'MMM d, yyyy')
-  } catch {
-    return dateString
-  }
+  return formatTradeDate(dateString, 'MMM d, yyyy')
 }
 
 /** Date and time using last execution time (exit_time), fallback to entry_time */
@@ -213,9 +220,7 @@ function formatDateWithTime(trade) {
 }
 
 function formatPercent(value) {
-  if (value === null || value === undefined) return '-'
-  const num = parseFloat(value)
-  return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
+  return formatPercentBase(value, { showSign: true })
 }
 
 function formatInstrumentType(type) {

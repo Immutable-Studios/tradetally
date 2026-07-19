@@ -166,8 +166,9 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import Chart from 'chart.js/auto'
+import { Chart } from '@/lib/chartSetup'
 import api from '@/services/api'
+import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
 
 const props = defineProps({
   filters: { type: Object, default: () => ({}) }
@@ -185,10 +186,7 @@ const scatterChart = ref(null)
 const histogramChart = ref(null)
 
 // ---- formatting ----
-function formatCurrency(val) {
-  if (val == null) return '—'
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val)
-}
+const { formatCurrency } = useCurrencyFormatter()
 
 function formatPoints(val) {
   if (val == null) return '—'

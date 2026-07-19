@@ -71,7 +71,7 @@
         <div class="border-b border-gray-200 dark:border-gray-700 pb-6">
           <h2 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Trade Information</h2>
 
-          <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+          <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
             <div>
               <label for="symbol" class="label">Symbol *</label>
               <SymbolAutocomplete
@@ -96,6 +96,14 @@
               <BaseSelect
                 v-model="form.instrumentType"
                 :options="[{ value: 'stock', label: 'Stock' }, { value: 'option', label: 'Option' }, { value: 'future', label: 'Future' }, { value: 'crypto', label: 'Crypto' }]"
+              />
+            </div>
+
+            <div>
+              <label for="originalCurrency" class="label">Currency</label>
+              <BaseSelect
+                v-model="form.originalCurrency"
+                :options="currencyOptions"
               />
             </div>
           </div>
@@ -1500,6 +1508,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTradesStore } from '@/stores/trades'
+import { useAccountsStore } from '@/stores/accounts'
 import { useAuthStore } from '@/stores/auth'
 import { useNotification } from '@/composables/useNotification'
 import { useAnalytics } from '@/composables/useAnalytics'
@@ -1516,6 +1525,8 @@ import BaseSelect from '@/components/common/BaseSelect.vue'
 import { useHiddenDropdownItems } from '@/composables/useHiddenDropdownItems'
 import { useStrategyOrder } from '@/composables/useStrategyOrder'
 import { useSetupOrder } from '@/composables/useSetupOrder'
+import { CURRENCY_OPTIONS } from '@/composables/useCurrencyFormatter'
+import { parseNullableNumber } from '@/utils/numbers'
 
 // Load section preferences from localStorage
 const defaultSectionPrefs = {
@@ -1819,6 +1830,7 @@ const form = ref({
   quantity: '',
   side: '',
   instrumentType: 'stock',
+  originalCurrency: 'USD',
   entryCommission: 0,
   exitCommission: 0,
   fees: 0,
@@ -1873,6 +1885,10 @@ const selectedOptionsTemplate = ref('')
 const showSaveFuturesTemplateModal = ref(false)
 const showSaveOptionsTemplateModal = ref(false)
 const showManageFuturesTemplatesModal = ref(false)
+const currencyOptions = CURRENCY_OPTIONS.map(currency => ({
+  value: currency.code,
+  label: `${currency.code} - ${currency.name}`
+}))
 const showManageOptionsTemplatesModal = ref(false)
 const newFuturesTemplateName = ref('')
 const newOptionsTemplateName = ref('')
@@ -2039,6 +2055,7 @@ async function loadTrade() {
       quantity: tradeData.quantity != null ? Number(tradeData.quantity) : '',
       side: tradeData.side,
       instrumentType: tradeData.instrument_type || 'stock',
+      originalCurrency: (tradeData.original_currency || tradeData.originalCurrency || 'USD').toUpperCase(),
       entryCommission: tradeData.entry_commission != null ? Number(tradeData.entry_commission) : (tradeData.commission != null ? Number(tradeData.commission) : 0),
       exitCommission: tradeData.exit_commission != null ? Number(tradeData.exit_commission) : 0,
       fees: tradeData.fees != null ? Number(tradeData.fees) : 0,
@@ -2167,7 +2184,13 @@ async function loadTrade() {
                 side: execSideValue,
                 quantity: exec.quantity != null ? Number(exec.quantity) : '',
                 entryPrice: exec.entryPrice != null ? Number(exec.entryPrice) : '',
-                exitPrice: exec.exitPrice != null ? Number(exec.exitPrice) : null,
+                exitPrice: (() => {
+                  const value = exec.exitPrice ?? exec.exit_price
+                  if (value != null) return Number(value)
+
+                  const hasExitTime = exec.exitTime ?? exec.exit_time
+                  return hasExitTime && Number(tradeData.exit_price) === 0 ? 0 : null
+                })(),
                 entryTime: exec.entryTime ? formatDateTimeLocal(exec.entryTime) : (exec.entry_time ? formatDateTimeLocal(exec.entry_time) : (tradeData.entry_time ? formatDateTimeLocal(tradeData.entry_time) : '')),
                 exitTime: exec.exitTime ? formatDateTimeLocal(exec.exitTime) : null,
                 commission: execCommission,
@@ -2369,7 +2392,7 @@ async function handleSubmit(opts = {}) {
     let calculatedEntryTime = form.value.entryTime
     let calculatedExitTime = form.value.exitTime
     let calculatedEntryPrice = parseFloat(form.value.entryPrice) || 0
-    let calculatedExitPrice = form.value.exitPrice ? parseFloat(form.value.exitPrice) : null
+    let calculatedExitPrice = parseNullableNumber(form.value.exitPrice)
     // Commission/fees: positive = fee paid, negative = rebate received
     let calculatedCommission = (parseFloat(form.value.entryCommission) || 0) + (parseFloat(form.value.exitCommission) || 0)
     let calculatedFees = parseFloat(form.value.fees) || 0
@@ -2388,7 +2411,7 @@ async function handleSubmit(opts = {}) {
               side: execSideValue,
               quantity: parseFloat(exec.quantity),
               entryPrice: parseFloat(exec.entryPrice),
-              exitPrice: exec.exitPrice ? parseFloat(exec.exitPrice) : null,
+              exitPrice: parseNullableNumber(exec.exitPrice),
               entryTime: toUTC(exec.entryTime),
               exitTime: exec.exitTime ? toUTC(exec.exitTime) : null,
               commission: parseFloat(exec.commission) || 0,  // Can be negative for rebates
@@ -2581,6 +2604,7 @@ async function handleSubmit(opts = {}) {
       symbol: form.value.symbol,
       side: derivedSide,
       instrumentType: form.value.instrumentType,
+      originalCurrency: (form.value.originalCurrency || 'USD').toUpperCase(),
       entryTime: finalEntryTime,
       exitTime: finalExitTime || null,
       entryPrice: calculatedEntryPrice,
@@ -3044,15 +3068,18 @@ function startAddAccount() {
 
 async function createAccountRecord(identifier) {
   try {
-    // Check if an account with this identifier already exists
-    const existing = await api.get('/accounts')
-    const accounts = existing.data.data || []
+    const accountsStore = useAccountsStore()
+
+    // Check if an account with this identifier already exists (forced fetch so
+    // the check never runs against a stale cached list)
+    const accounts = (await accountsStore.fetchAccounts({ force: true })) || []
     if (accounts.some(a => a.accountIdentifier === identifier)) {
       console.log('[TRADE FORM] Account record already exists for:', identifier)
       return
     }
 
-    await api.post('/accounts', {
+    // Store action refreshes the shared accounts cache after creation
+    await accountsStore.createAccount({
       accountName: identifier,
       accountIdentifier: identifier,
       broker: form.value.broker || null,

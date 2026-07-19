@@ -18,6 +18,7 @@ const OptionStrategyGroupingService = require('../optionStrategyGroupingService'
 const { version: APP_VERSION } = require('../../../package.json');
 
 const FLEX_BASE_URL = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService';
+const FLEX_STATEMENT_PATH = '/AccountManagement/FlexWebService/GetStatement';
 const FLEX_USER_AGENT = `TradeTally/${APP_VERSION}`;
 const REPORT_REQUEST_TIMEOUT = 120000; // 2 minutes to request report
 const REPORT_POLL_INTERVAL = 5000; // Poll every 5 seconds
@@ -213,6 +214,27 @@ function isRetryableErrorMessage(message) {
   return RETRYABLE_MESSAGE_PHRASES.some(phrase => text.includes(phrase));
 }
 
+function getFlexStatementUrl(responseData) {
+  const urlMatch = String(responseData || '').match(/<Url>\s*([^<]+?)\s*<\/Url>/i);
+  if (!urlMatch) return `${FLEX_BASE_URL}/GetStatement`;
+
+  try {
+    const statementUrl = new URL(urlMatch[1].replace(/&amp;/g, '&').trim());
+    const isIBKRHost = statementUrl.hostname === 'interactivebrokers.com' ||
+      statementUrl.hostname.endsWith('.interactivebrokers.com');
+
+    if (statementUrl.protocol !== 'https:' || !isIBKRHost || statementUrl.pathname !== FLEX_STATEMENT_PATH) {
+      console.warn('[IBKR] Ignoring invalid Flex statement URL returned by IBKR');
+      return `${FLEX_BASE_URL}/GetStatement`;
+    }
+
+    return statementUrl.toString();
+  } catch (_) {
+    console.warn('[IBKR] Ignoring malformed Flex statement URL returned by IBKR');
+    return `${FLEX_BASE_URL}/GetStatement`;
+  }
+}
+
 /**
  * Build an Error annotated with the IBKR error code and a transient flag.
  * The caller (sync orchestrator) uses these to (a) save error_details and
@@ -305,7 +327,10 @@ class IBKRService {
 
         const referenceCode = refCodeMatch[1];
         console.log('[IBKR] Got reference code:', referenceCode);
-        return { referenceCode };
+        return {
+          referenceCode,
+          statementUrl: getFlexStatementUrl(data)
+        };
       } catch (error) {
         if (error.response) {
           console.error('[IBKR] API error status:', error.response.status);
@@ -346,7 +371,7 @@ class IBKRService {
     const maxWait = options.maxWait || REPORT_INITIAL_MAX_WAIT;
     console.log(`[IBKR] Fetching Flex report (max wait ${Math.round(maxWait / 1000)}s)...`);
 
-    const url = `${FLEX_BASE_URL}/GetStatement`;
+    const url = options.statementUrl || `${FLEX_BASE_URL}/GetStatement`;
     const params = {
       t: flexToken,
       q: referenceCode,
@@ -452,7 +477,10 @@ class IBKRService {
       csvData = await this.fetchFlexReport(
         reportResponse.referenceCode,
         connection.ibkrFlexToken,
-        { maxWait: REPORT_INITIAL_MAX_WAIT }
+        {
+          maxWait: REPORT_INITIAL_MAX_WAIT,
+          statementUrl: reportResponse.statementUrl
+        }
       );
     } catch (error) {
       if (error.errorCode === 'TIMEOUT') {
@@ -461,7 +489,10 @@ class IBKRService {
         csvData = await this.fetchFlexReport(
           reportResponse.referenceCode,
           connection.ibkrFlexToken,
-          { maxWait: remainingMs }
+          {
+            maxWait: remainingMs,
+            statementUrl: reportResponse.statementUrl
+          }
         );
       } else {
         throw error;
@@ -671,6 +702,14 @@ class IBKRService {
       await AnalyticsCache.invalidate(userId);
     } catch (cacheErr) {
       console.warn(`[IBKR] AnalyticsCache invalidation failed: ${cacheErr.message}`);
+    }
+
+    // Per-row creates skip achievements; run one end-of-batch check instead
+    if (imported > 0 || updated > 0) {
+      const AchievementService = require('../achievementService');
+      AchievementService.checkAndAwardAchievements(userId).catch(error => {
+        console.warn(`[IBKR] Failed to check achievements after sync for user ${userId}:`, error.message);
+      });
     }
 
     return { imported, updated, skipped, failed, duplicates };
@@ -1309,9 +1348,13 @@ class IBKRService {
    * Prepare trade data for insertion
    */
   prepareTrade(tradeData) {
+    const sourceCurrency = tradeData.originalCurrency || tradeData.original_currency || tradeData.currency || 'USD';
+
     return {
       ...tradeData,
       broker: tradeData.broker || 'ibkr',
+      originalCurrency: String(sourceCurrency).toUpperCase(),
+      exchangeRate: tradeData.exchangeRate || tradeData.exchange_rate || 1.0,
       // Ensure required fields have defaults
       commission: tradeData.commission || 0,
       fees: tradeData.fees || 0

@@ -4,6 +4,7 @@ const historicalPriceCache = require('./historicalPriceCache');
 const ApiUsageService = require('../services/apiUsageService');
 const TierService = require('../services/tierService');
 const { FinnhubPriority, FinnhubRequestScheduler } = require('./finnhubScheduler');
+const { localToUTC } = require('./timezone');
 
 class UnsupportedMarketDataError extends Error {
   constructor(feature) {
@@ -46,8 +47,20 @@ function unixSeconds(dateLike) {
   return Math.floor(new Date(dateLike).getTime() / 1000);
 }
 
+function fmpIntradayUnixSeconds(dateLike) {
+  if (typeof dateLike === 'number') return unixSeconds(dateLike);
+  const easternTimestamp = localToUTC(String(dateLike).replace(' ', 'T'), 'America/New_York');
+  return unixSeconds(easternTimestamp);
+}
+
 function normalizePeriod(frequency) {
   return frequency === 'quarterly' ? 'quarter' : 'annual';
+}
+
+function normalizeFmpStockSymbol(symbol) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  const exchangeQualifiedMatch = normalizedSymbol.match(/^[^:]+:(.+)$/);
+  return exchangeQualifiedMatch ? exchangeQualifiedMatch[1] : normalizedSymbol;
 }
 
 class FmpClient {
@@ -120,19 +133,31 @@ class FmpClient {
       return response.data;
     };
 
-    try {
-      return await this.scheduler.schedule(executeRequest, requestContext);
-    } catch (error) {
-      if (error.code && String(error.code).startsWith('FINNHUB_SCHEDULER_')) {
+    const MAX_RATE_LIMIT_RETRIES = 2;
+    let rateLimitRetries = 0;
+
+    while (true) {
+      try {
+        return await this.scheduler.schedule(executeRequest, requestContext);
+      } catch (error) {
+        if (error.code && String(error.code).startsWith('FINNHUB_SCHEDULER_')) {
+          throw error;
+        }
+        if (error.response) {
+          // A 429 puts the scheduler into cooldown; re-queue the request and
+          // let the scheduler pace the retry once the provider window clears.
+          if (error.response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+            rateLimitRetries++;
+            console.warn(`[FMP] 429 on ${endpoint}, re-queueing (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`);
+            continue;
+          }
+          if (error.response.status === 429) {
+            throw new Error(`FMP API rate limit exceeded: ${error.response.status}`);
+          }
+          throw new Error(`FMP API error: ${error.response.status} - ${error.response.data?.error || error.response.statusText || 'Unknown error'}`);
+        }
         throw error;
       }
-      if (error.response) {
-        if (error.response.status === 429) {
-          throw new Error(`FMP API rate limit exceeded: ${error.response.status}`);
-        }
-        throw new Error(`FMP API error: ${error.response.status} - ${error.response.data?.error || error.response.statusText || 'Unknown error'}`);
-      }
-      throw error;
     }
   }
 
@@ -380,7 +405,13 @@ class FmpClient {
     const normalizedContext = this.normalizeUserContext(userIdOrOptions, options);
     const userId = normalizedContext.userId;
     const requestOptions = normalizedContext.options;
-    const symbolUpper = symbol.toUpperCase();
+    // TradingView imports can preserve exchange-qualified stock symbols such as
+    // NASDAQ:DEVS. FMP expects only the provider ticker (DEVS) in candle calls.
+    const symbolUpper = normalizeFmpStockSymbol(symbol);
+
+    if (!symbolUpper) {
+      throw new Error('A symbol is required to get candle data');
+    }
 
     if (userId) {
       const userTier = await TierService.getUserTier(userId);
@@ -394,7 +425,8 @@ class FmpClient {
       }
     }
 
-    const cacheKey = `fmp_${symbolUpper}_${resolution}_${from}_${to}`;
+    // v2 timestamps are true UTC epochs derived from FMP's Eastern wall clock.
+    const cacheKey = `fmp_v2_${symbolUpper}_${resolution}_${from}_${to}`;
     const cached = await cache.get('stock_candles', cacheKey);
     if (cached) return cached;
 
@@ -413,8 +445,11 @@ class FmpClient {
     });
 
     const rows = Array.isArray(data) ? data : (data?.historical || []);
+    const isDaily = endpoint === '/historical-price-eod/full';
     const candles = rows.map(row => ({
-      time: unixSeconds(row.date || row.label),
+      time: isDaily
+        ? unixSeconds(row.date || row.label)
+        : fmpIntradayUnixSeconds(row.date || row.label),
       open: asNumber(row.open),
       high: asNumber(row.high),
       low: asNumber(row.low),
@@ -443,36 +478,36 @@ class FmpClient {
     return this.getStockCandles(symbol, resolution, from, to, userIdOrOptions, options);
   }
 
-  // options.resolution: 'D' (daily) or '5' (5-minute) forces a specific resolution
-  // and an appropriate date window. When omitted, defaults to a 1-minute view of
-  // the single trade day (legacy behavior).
-  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, options = {}) {
-    const forcedResolution = options.resolution || null;
+  // requestedResolution: '1', '5', '15', '60' or 'D'. Forces a specific
+  // resolution/window; defaults to a 1-minute view of the single trade day.
+  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, requestedResolution = '1') {
     const oneDayMs = 24 * 60 * 60 * 1000;
+    const intervals = {
+      '1': '1min',
+      '5': '5min',
+      '15': '15min',
+      '60': '1hour',
+      D: 'daily'
+    };
 
     const entryTime = new Date(entryDate);
     const exitTime = exitDate ? new Date(exitDate) : new Date();
     const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
     const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
 
-    let resolution, intervalName, chartFromTime, chartToTime;
+    const resolution = Object.hasOwn(intervals, requestedResolution) ? requestedResolution : '1';
 
-    if (forcedResolution === 'D') {
+    let chartFromTime, chartToTime;
+    if (resolution === 'D') {
       // Daily chart: ~90 days before entry through ~14 days after exit, capped at now.
-      resolution = 'D';
-      intervalName = 'daily';
       chartFromTime = new Date(entryDateUTC.getTime() - 90 * oneDayMs);
       chartToTime = new Date(Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now()));
-    } else if (forcedResolution === '5') {
+    } else if (resolution === '5') {
       // 5-minute chart spanning the trade day(s) with extended trading hours.
-      resolution = '5';
-      intervalName = '5min';
       chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
       chartToTime = new Date(exitDateUTC.getTime() + 25 * 60 * 60 * 1000);
     } else {
-      // Legacy: 1-minute view of the single trade day.
-      resolution = '1';
-      intervalName = '1min';
+      // Intraday view of the single trade day.
       chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
       chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
     }
@@ -482,7 +517,7 @@ class FmpClient {
     const candles = await this.getStockCandles(symbol, resolution, fromTimestamp, toTimestamp, userId);
     return {
       type: resolution === 'D' ? 'daily' : 'intraday',
-      interval: intervalName,
+      interval: intervals[resolution],
       resolution,
       candles,
       source: 'fmp'
@@ -550,8 +585,8 @@ class FmpClient {
   async getStockSplits(symbol, from, to, options = {}) {
     if (!this.apiKey) return [];
     const symbolUpper = symbol.toUpperCase();
-    const cacheKey = `fmp_stock_splits_${symbolUpper}_${from}_${to}`;
-    const cached = await cache.get(cacheKey);
+    const cacheKey = `fmp_${symbolUpper}_${from}_${to}`;
+    const cached = await cache.get('stock_splits', cacheKey);
     if (cached) return cached;
 
     const data = await this.makeRequest('/splits', { symbol: symbolUpper, from, to }, {
@@ -567,7 +602,7 @@ class FmpClient {
       toFactor: asNumber(row.denominator ?? row.toFactor),
       ratio: row.ratio || null
     }));
-    await cache.set(cacheKey, splits, 86400);
+    await cache.set('stock_splits', cacheKey, splits, 24 * 60 * 60 * 1000);
     return splits;
   }
 
@@ -608,7 +643,9 @@ class FmpClient {
     const row = (data?.historical || data || [])[0];
     const rate = asNumber(row?.close ?? row?.price);
     if (!rate) throw new Error(`No forex rate available for ${baseUpper}/${targetUpper} on ${formattedDate}`);
-    await cache.set('forex_rates', cacheKey, rate);
+    // Explicit TTL: the value is numeric, so the 3-arg form would be misread
+    // as a direct-key set with a TTL
+    await cache.set('forex_rates', cacheKey, rate, 24 * 60 * 60 * 1000);
     return rate;
   }
 

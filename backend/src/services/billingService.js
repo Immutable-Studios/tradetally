@@ -1,5 +1,7 @@
 const db = require('../config/database');
 const TierService = require('./tierService');
+const tierCache = require('./tierCache');
+const settingsCache = require('./settingsCache');
 const User = require('../models/User');
 const EmailService = require('./emailService');
 const invoiceNinjaSyncService = require('./invoiceNinjaSyncService');
@@ -23,6 +25,7 @@ class BillingService {
     `;
 
     const result = await db.query(deleteQuery, [userId]);
+    tierCache.invalidate(userId);
     return result.rowCount;
   }
 
@@ -615,6 +618,7 @@ class BillingService {
           `UPDATE user_settings SET pro_onboarding_step = 1 WHERE user_id = $1 AND pro_onboarding_step = 0`,
           [userId]
         );
+        settingsCache.invalidate(userId);
       } catch (onboardErr) {
         console.log('[BILLING] Pro onboarding trigger failed (non-blocking):', onboardErr.message);
       }
@@ -644,17 +648,18 @@ class BillingService {
 
   // Handle subscription deleted
   static async handleSubscriptionDeleted(subscription) {
-    await TierService.handleSubscriptionUpdate(subscription.id, 'canceled');
-    
+    const userId = await TierService.handleSubscriptionUpdate(subscription.id, 'canceled');
+
     // Update subscription status in database
     const updateQuery = `
-      UPDATE subscriptions 
-      SET status = 'canceled', 
+      UPDATE subscriptions
+      SET status = 'canceled',
           canceled_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
       WHERE stripe_subscription_id = $1
     `;
     await db.query(updateQuery, [subscription.id]);
+    tierCache.invalidate(userId);
   }
 
   // Handle successful payment
@@ -804,6 +809,7 @@ class BillingService {
     ];
 
     const result = await db.query(query, values);
+    tierCache.invalidate(userId);
     return result.rows[0];
   }
 

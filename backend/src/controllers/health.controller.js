@@ -3,6 +3,19 @@ const logger = require('../utils/logger');
 const aiService = require('../utils/aiService');
 
 class HealthController {
+  constructor() {
+    [
+      'submitHealthData',
+      'getHealthData',
+      'analyzeCorrelations',
+      'getInsights',
+      'correlateHealthWithTrades',
+      'getHealthInsights'
+    ].forEach((method) => {
+      this[method] = this[method].bind(this);
+    });
+  }
+
   normalizeDataType(type) {
     const normalized = String(type || '').trim();
     const aliases = {
@@ -76,7 +89,7 @@ class HealthController {
       const { healthData } = req.body;
       
       // Enhanced logging for debugging mobile app submissions
-      console.log('\n🔔 HEALTH DATA SUBMISSION RECEIVED FROM MOBILE APP');
+      console.log('\n[INFO] HEALTH DATA SUBMISSION RECEIVED FROM MOBILE APP');
       console.log('  User ID:', userId);
       console.log('  Timestamp:', new Date().toISOString());
       console.log('  Request Headers:', {
@@ -90,7 +103,7 @@ class HealthController {
       });
 
       if (!Array.isArray(healthData)) {
-        console.log('  ❌ ERROR: Health data must be an array');
+        console.log('  [ERROR] Health data must be an array');
         return res.status(400).json({
           success: false,
           message: 'Health data must be an array'
@@ -98,80 +111,77 @@ class HealthController {
       }
 
       logger.info(`Receiving ${healthData.length} health data points for user ${userId}`, 'health');
-      console.log(`  📊 Processing ${healthData.length} health data points...`);
+      console.log(`  [PROCESS] Processing ${healthData.length} health data points...`);
 
       // Debug: Count data types
       const dataTypeCounts = {};
       healthData.forEach(point => {
         dataTypeCounts[point.type] = (dataTypeCounts[point.type] || 0) + 1;
       });
-      console.log(`  📊 Data types received:`, dataTypeCounts);
+      console.log('  [INFO] Data types received:', dataTypeCounts);
       logger.info(`Data types received: ${JSON.stringify(dataTypeCounts)}`, 'health');
-
-      // Begin transaction
-      await db.query('BEGIN');
 
       let insertedCount = 0;
       let updatedCount = 0;
 
-      for (const dataPoint of healthData) {
-        const { date, type, value, timestamp } = dataPoint;
-        const dataType = this.normalizeDataType(type);
-        const metadata = this.normalizeMetadata(dataPoint.metadata || {});
+      await db.withTransaction(async (client) => {
+        for (const dataPoint of healthData) {
+          const { date, type, value, timestamp } = dataPoint;
+          const dataType = this.normalizeDataType(type);
+          const metadata = this.normalizeMetadata(dataPoint.metadata || {});
 
-        // Validate required fields
-        if (!date || !dataType || value === undefined) {
-          logger.warn(`Invalid health data point received (date=${date || 'missing'}, type=${type || 'missing'})`, 'health');
-          continue;
-        }
-
-        // For time-series data (heart rate), use timestamp instead of date for uniqueness
-        if (timestamp && dataType === 'heart_rate') {
-          // Insert individual time-series samples (heart rate at 1-minute intervals)
-          const result = await db.query(`
-            INSERT INTO health_data (user_id, date, data_type, value, metadata, timestamp, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW())
-            ON CONFLICT (user_id, data_type, timestamp)
-            WHERE timestamp IS NOT NULL
-            DO UPDATE SET
-              value = EXCLUDED.value,
-              metadata = EXCLUDED.metadata,
-              updated_at = NOW()
-            RETURNING (xmax = 0) AS inserted
-          `, [userId, date, dataType, value, JSON.stringify(metadata), timestamp]);
-
-          if (result.rows[0].inserted) {
-            insertedCount++;
-          } else {
-            updatedCount++;
+          // Validate required fields
+          if (!date || !dataType || value === undefined) {
+            logger.warn(`Invalid health data point received (date=${date || 'missing'}, type=${type || 'missing'})`, 'health');
+            continue;
           }
-        } else {
-          // Daily aggregates (sleep data)
-          const result = await db.query(`
-            INSERT INTO health_data (user_id, date, data_type, value, metadata, updated_at)
-            VALUES ($1, $2, $3, $4, $5, NOW())
-            ON CONFLICT (user_id, data_type, date)
-            WHERE timestamp IS NULL
-            DO UPDATE SET
-              value = EXCLUDED.value,
-              metadata = EXCLUDED.metadata,
-              updated_at = NOW()
-            RETURNING (xmax = 0) AS inserted
-          `, [userId, date, dataType, value, JSON.stringify(metadata)]);
 
-          if (result.rows[0].inserted) {
-            insertedCount++;
+          // For time-series data (heart rate), use timestamp instead of date for uniqueness
+          if (timestamp && dataType === 'heart_rate') {
+            // Insert individual time-series samples (heart rate at 1-minute intervals)
+            const result = await client.query(`
+              INSERT INTO health_data (user_id, date, data_type, value, metadata, timestamp, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, NOW())
+              ON CONFLICT (user_id, data_type, timestamp)
+              WHERE timestamp IS NOT NULL
+              DO UPDATE SET
+                value = EXCLUDED.value,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+              RETURNING (xmax = 0) AS inserted
+            `, [userId, date, dataType, value, JSON.stringify(metadata), timestamp]);
+
+            if (result.rows[0].inserted) {
+              insertedCount++;
+            } else {
+              updatedCount++;
+            }
           } else {
-            updatedCount++;
+            // Daily aggregates (sleep data)
+            const result = await client.query(`
+              INSERT INTO health_data (user_id, date, data_type, value, metadata, updated_at)
+              VALUES ($1, $2, $3, $4, $5, NOW())
+              ON CONFLICT (user_id, data_type, date)
+              WHERE timestamp IS NULL
+              DO UPDATE SET
+                value = EXCLUDED.value,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+              RETURNING (xmax = 0) AS inserted
+            `, [userId, date, dataType, value, JSON.stringify(metadata)]);
+
+            if (result.rows[0].inserted) {
+              insertedCount++;
+            } else {
+              updatedCount++;
+            }
           }
         }
-      }
-
-      await db.query('COMMIT');
+      });
 
       logger.info(`Health data submitted: ${insertedCount} inserted, ${updatedCount} updated for user ${userId}`, 'health');
       
-      console.log('  ✅ SUCCESS: Health data processed');
+      console.log('  [SUCCESS] Health data processed');
       console.log(`     Inserted: ${insertedCount} new records`);
       console.log(`     Updated: ${updatedCount} existing records`);
       console.log(`     Total processed: ${insertedCount + updatedCount}`);
@@ -188,7 +198,6 @@ class HealthController {
       });
 
     } catch (error) {
-      await db.query('ROLLBACK');
       logger.error(`Error submitting health data: ${error.message}`, 'health');
       res.status(500).json({
         success: false,
@@ -802,13 +811,18 @@ class HealthController {
         };
       }
 
-      // Update trades with heart rate matching by timestamp (within ±2 minutes)
+      // Update trades with heart rate matching by timestamp (within ±10 minutes)
       let updatedCount = 0;
       for (const trade of tradesResult.rows) {
         const tradeTime = new Date(trade.entry_time);
 
-        // Find closest heart rate sample within ±2 minutes
-        const matchWindow = 2 * 60 * 1000; // 2 minutes in milliseconds
+        // Find closest heart rate sample within ±10 minutes.
+        // Apple Watch publishes at most one background heart rate per
+        // non-overlapping 5-minute window, and only when the wearer is still
+        // (Apple: "Using Apple Watch to measure heart rate", Nov 2024) — so
+        // ±10 min covers the nominal cadence plus one missed cycle. We take
+        // the closest sample, so a wider window never reduces precision.
+        const matchWindow = 10 * 60 * 1000; // 10 minutes in milliseconds
         let closestHR = null;
         let minDiff = Infinity;
 

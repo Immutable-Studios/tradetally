@@ -1,10 +1,13 @@
 describe('finnhub request context', () => {
   let originalApiKey;
+  let originalMarketDataProvider;
 
   beforeEach(() => {
     jest.resetModules();
     originalApiKey = process.env.FINNHUB_API_KEY;
+    originalMarketDataProvider = process.env.MARKET_DATA_PROVIDER;
     process.env.FINNHUB_API_KEY = 'test-key';
+    process.env.MARKET_DATA_PROVIDER = 'finnhub';
 
     jest.doMock('axios', () => ({
       get: jest.fn(async (url) => {
@@ -54,6 +57,11 @@ describe('finnhub request context', () => {
     } else {
       process.env.FINNHUB_API_KEY = originalApiKey;
     }
+    if (originalMarketDataProvider === undefined) {
+      delete process.env.MARKET_DATA_PROVIDER;
+    } else {
+      process.env.MARKET_DATA_PROVIDER = originalMarketDataProvider;
+    }
     jest.dontMock('axios');
     jest.dontMock('../../src/utils/cache');
     jest.dontMock('../../src/utils/historicalPriceCache');
@@ -96,6 +104,27 @@ describe('finnhub request context', () => {
       priority: 1,
       userId: 'user-1'
     });
+  });
+
+  test('requests the selected Finnhub trade chart resolution', async () => {
+    const { finnhub } = loadFinnhubWithContextCapture();
+    const axios = require('axios');
+
+    const chartData = await finnhub.getTradeChartData(
+      'AAPL',
+      '2025-01-02T15:30:00.000Z',
+      '2025-01-02T16:00:00.000Z',
+      'user-1',
+      '60'
+    );
+
+    expect(chartData).toMatchObject({ type: 'intraday', interval: '1hour', source: 'finnhub' });
+    expect(axios.get).toHaveBeenCalledWith(
+      expect.stringContaining('/stock/candle'),
+      expect.objectContaining({
+        params: expect.objectContaining({ resolution: '60' })
+      })
+    );
   });
 
   test('getStockSplits passes lowest-priority background context', async () => {

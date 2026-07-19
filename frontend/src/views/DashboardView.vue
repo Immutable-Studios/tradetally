@@ -494,7 +494,11 @@
                         Your equity curve appears here once you log trades.
                       </div>
                       <div v-else class="flex-1 min-h-[280px]">
-                        <canvas ref="equityCurveCanvas" />
+                        <EquityCurveChart
+                          :daily-pn-l="analytics?.dailyPnL || []"
+                          :currency-symbol="currencySymbol"
+                          @select-date="navigateToTradesByDate"
+                        />
                       </div>
                     </div>
                   </div>
@@ -542,6 +546,11 @@
                   />
                 </div>
               </div>
+            </template>
+
+            <!-- Market Risk Indicators (macro valuation/stress gauges) -->
+            <template v-if="element.id === 'market-risk'">
+              <MarketRiskCard />
             </template>
 
             <!-- News + Upcoming Earnings now render in the sticky right rail
@@ -1252,7 +1261,10 @@
                       Win/Loss Distribution
                     </h3>
                     <div class="h-64 relative">
-                      <canvas ref="distributionChart"></canvas>
+                      <WinLossDistributionChart
+                        :summary="analytics?.summary || {}"
+                        @select-segment="navigateToTradesByPnLType"
+                      />
                       <!-- Center label below the arc -->
                       <div class="absolute bottom-0 left-0 right-0 flex justify-center pointer-events-none" style="margin-bottom: 0.25rem;">
                         <div class="text-center">
@@ -1303,7 +1315,10 @@
                       Daily Win Rate &amp; P/L Ratio
                     </h3>
                     <div class="h-80">
-                      <canvas ref="winRateChart"></canvas>
+                      <WinRateChart
+                        :daily-win-rate="analytics?.dailyWinRate || []"
+                        @select-date="navigateToTradesByDate"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1602,35 +1617,51 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch, computed, onUnmounted } from 'vue'
+import { ref, onMounted, nextTick, watch, computed, onUnmounted, defineAsyncComponent } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import { format } from 'date-fns'
 import { formatTradeDate, formatLocalDate } from '@/utils/date'
-import Chart from 'chart.js/auto'
 import api from '@/services/api'
-import TradeNewsSection from '@/components/dashboard/TradeNewsSection.vue'
-import UpcomingEarningsSection from '@/components/dashboard/UpcomingEarningsSection.vue'
+// Above-the-fold sections stay statically imported so they render on the
+// first paint without a chunk-fetch waterfall.
 import TodaysJournalEntry from '@/components/diary/TodaysJournalEntry.vue'
 import HeroMetricsRibbon from '@/components/dashboard/HeroMetricsRibbon.vue'
 import AiInsightCard from '@/components/dashboard/AiInsightCard.vue'
-import CalendarHeatmap from '@/components/dashboard/CalendarHeatmap.vue'
-import StreakMomentumCard from '@/components/dashboard/StreakMomentumCard.vue'
-import BehavioralAlertsCard from '@/components/dashboard/BehavioralAlertsCard.vue'
-import RecentTradesTimeline from '@/components/dashboard/RecentTradesTimeline.vue'
-import WinLossPulse from '@/components/dashboard/WinLossPulse.vue'
 import MdiIcon from '@/components/MdiIcon.vue'
 import { mdiCheckCircle } from '@mdi/js'
 import { getRefreshInterval, shouldRefreshPrices, getMarketStatus } from '@/utils/marketHours'
 import YearWrappedBanner from '@/components/yearWrapped/YearWrappedBanner.vue'
-import YearWrappedModal from '@/components/yearWrapped/YearWrappedModal.vue'
 import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
 import StockLogo from '@/components/common/StockLogo.vue'
-import TradeFilters from '@/components/trades/TradeFilters.vue'
+// Below-the-fold dashboard sections and modal-only panels are lazy-loaded so
+// their code (and deps like the news/earnings and chart helpers) drops out of
+// the DashboardView entry chunk. They mount as the user scrolls / opens the
+// modal — the load delay is invisible for content that isn't in the first
+// viewport. (vuedraggable is deliberately NOT async: it wraps the above-fold
+// hero ribbon, so deferring it would flash the primary content.)
+const TradeNewsSection = defineAsyncComponent(() => import('@/components/dashboard/TradeNewsSection.vue'))
+const UpcomingEarningsSection = defineAsyncComponent(() => import('@/components/dashboard/UpcomingEarningsSection.vue'))
+const CalendarHeatmap = defineAsyncComponent(() => import('@/components/dashboard/CalendarHeatmap.vue'))
+const StreakMomentumCard = defineAsyncComponent(() => import('@/components/dashboard/StreakMomentumCard.vue'))
+const BehavioralAlertsCard = defineAsyncComponent(() => import('@/components/dashboard/BehavioralAlertsCard.vue'))
+const RecentTradesTimeline = defineAsyncComponent(() => import('@/components/dashboard/RecentTradesTimeline.vue'))
+const WinLossPulse = defineAsyncComponent(() => import('@/components/dashboard/WinLossPulse.vue'))
+const MarketRiskCard = defineAsyncComponent(() => import('@/components/dashboard/MarketRiskCard.vue'))
+// Parent-managed Chart.js charts, extracted into self-contained children that
+// own their own canvas + create/update/destroy lifecycle. Lazy-loaded so the
+// Chart.js code drops out of the DashboardView entry chunk (matching the
+// already-async CalendarHeatmap that shares the equity-and-calendar section).
+const EquityCurveChart = defineAsyncComponent(() => import('@/components/dashboard/EquityCurveChart.vue'))
+const WinLossDistributionChart = defineAsyncComponent(() => import('@/components/dashboard/WinLossDistributionChart.vue'))
+const WinRateChart = defineAsyncComponent(() => import('@/components/dashboard/WinRateChart.vue'))
+const YearWrappedModal = defineAsyncComponent(() => import('@/components/yearWrapped/YearWrappedModal.vue'))
+const TradeFilters = defineAsyncComponent(() => import('@/components/trades/TradeFilters.vue'))
 import { useYearWrappedStore } from '@/stores/yearWrapped'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useTradesStore } from '@/stores/trades'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
+import { useVisibilityPolling } from '@/composables/useVisibilityPolling'
 import { useUserTimezone } from '@/composables/useUserTimezone'
 import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
 import {
@@ -1836,16 +1867,28 @@ function selectTimeRange(value) {
   applyFilters()
 }
 
-const pnlChart = ref(null)
-const distributionChart = ref(null)
-const winRateChart = ref(null)
-const equityCurveCanvas = ref(null) // command-center equity curve in new equity-and-calendar section
-let pnlChartInstance = null
-let distributionChartInstance = null
-let winRateChartInstance = null
-let equityCurveChartInstance = null
-let updateInterval = null
+// Dashboard charts (equity curve, win/loss doughnut, daily win-rate) now live
+// in self-contained child components that own their own Chart.js lifecycle.
 let countdownInterval = null
+
+// Auto-refresh open positions during market hours. The interval comes from
+// getRefreshInterval() and is captured by startAutoUpdate() before start().
+// Visibility-gated: pauses while the tab is hidden, refreshes on refocus.
+let currentRefreshInterval = 60000
+const openPositionsPoller = useVisibilityPolling(async () => {
+  console.log('Dashboard: Auto-updating open positions and news...')
+  try {
+    // Only refresh open positions during market hours for price updates
+    await fetchOpenTrades({ fastFirst: false })
+    lastRefresh.value = new Date()
+    console.log('Dashboard: Auto-update completed successfully')
+  } catch (error) {
+    console.error('Dashboard: Auto-update failed:', error)
+  }
+}, () => currentRefreshInterval)
+
+// Check market status every minute to handle market open/close transitions
+const marketStatusPoller = useVisibilityPolling(() => checkMarketStatus(), 60000)
 
 // Dashboard layout customization
 // Default section order — optimized for "what convinces in 5 seconds":
@@ -1862,6 +1905,7 @@ const sectionDefinitions = [
   { id: 'open-positions', title: 'Open Positions', category: 'content', defaultVisible: true },
   { id: 'momentum-and-risk', title: 'Momentum & Risk Signals', category: 'stats', defaultVisible: true },
   { id: 'recent-trades-and-distribution', title: 'Recent Trades & Win Rate', category: 'tables', defaultVisible: true },
+  { id: 'market-risk', title: 'Market Risk Indicators', category: 'stats', defaultVisible: true },
   // News + Earnings live in a sticky right rail outside the draggable flow.
   // `location: 'rail'` flags it so the draggable template skips rendering it,
   // but the standard visibility toggle still works from customize mode.
@@ -2446,7 +2490,6 @@ function loadCachedAnalytics() {
       const data = JSON.parse(stored)
       analytics.value = data
       analyticsLoading.value = false
-      nextTick(() => createCharts())
       return true
     }
   } catch (e) {
@@ -2483,9 +2526,6 @@ async function fetchAnalytics() {
     } catch (e) {
       // sessionStorage write failed (quota, private mode, etc.)
     }
-
-    await nextTick()
-    createCharts()
   } catch (error) {
     console.error('Failed to fetch analytics:', error)
   } finally {
@@ -2709,421 +2749,6 @@ async function fetchOpenTrades(options = {}) {
   }
 }
 
-function createPnLChart() {
-  console.log('Dashboard: Creating P&L chart...');
-  if (pnlChartInstance) {
-    pnlChartInstance.destroy();
-  }
-
-  const ctx = pnlChart.value.getContext('2d');
-  const dailyData = analytics.value.dailyPnL || [];
-  const pnlValues = dailyData.map(d => parseFloat(d.cumulative_pnl) || 0);
-
-  const positiveColor = 'rgba(16, 185, 129, 1)'; // Solid green
-  const negativeColor = 'rgba(239, 68, 68, 1)'; // Solid red
-  const positiveFillColor = 'rgba(16, 185, 129, 0.2)'; // Lighter green fill
-  const negativeFillColor = 'rgba(239, 68, 68, 0.2)'; // Lighter red fill
-
-  try {
-    pnlChartInstance = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: dailyData.map(d => formatTradeDate(d.trade_date, 'MMM dd')),
-        datasets: [{
-          label: 'Cumulative P&L',
-          data: pnlValues,
-          fill: {
-            target: 'origin',
-            above: positiveFillColor, 
-            below: negativeFillColor
-          },
-          segment: {
-            borderColor: ctx => {
-              const y = ctx.p1.parsed.y;
-              return y >= 0 ? positiveColor : negativeColor;
-            },
-          },
-          tension: 0.1,
-          pointBackgroundColor: 'orange',
-          pointBorderColor: 'orange',
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        onClick: (event, elements) => {
-          if (elements.length > 0) {
-            const index = elements[0].index;
-            const clickedDate = dailyData[index].trade_date;
-            navigateToTradesByDate(clickedDate);
-          }
-        },
-        plugins: {
-          legend: {
-            display: false
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: false,
-            grid: {
-              color: 'rgba(156, 163, 175, 0.1)'
-            },
-            ticks: {
-              callback: function(value) {
-                return currencySymbol.value + value.toLocaleString();
-              }
-            }
-          },
-          x: {
-            grid: {
-              color: 'rgba(156, 163, 175, 0.1)'
-            }
-          }
-        }
-      }
-    });
-    console.log('Dashboard: P&L chart created successfully');
-  } catch (error) {
-    console.error('Dashboard: Error creating P&L chart:', error);
-  }
-}
-
-// Command-center equity curve, used by the new equity-and-calendar section.
-// Separate from createPnLChart because it renders to a different canvas ref
-// (equityCurveCanvas) and has a sparser, more command-center style.
-function createEquityCurveChart() {
-  if (equityCurveChartInstance) {
-    equityCurveChartInstance.destroy()
-  }
-  if (!equityCurveCanvas.value) return
-
-  const ctx = equityCurveCanvas.value.getContext('2d')
-  const dailyData = analytics.value.dailyPnL || []
-  if (dailyData.length === 0) return
-
-  const pnlValues = dailyData.map(d => parseFloat(d.cumulative_pnl) || 0)
-  const positiveColor = 'rgba(22, 163, 74, 1)'
-  const negativeColor = 'rgba(220, 38, 38, 1)'
-  const positiveFill = 'rgba(22, 163, 74, 0.12)'
-  const negativeFill = 'rgba(220, 38, 38, 0.12)'
-
-  try {
-    equityCurveChartInstance = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: dailyData.map(d => formatTradeDate(d.trade_date, 'MMM dd')),
-        datasets: [{
-          label: 'Cumulative P&L',
-          data: pnlValues,
-          fill: {
-            target: 'origin',
-            above: positiveFill,
-            below: negativeFill
-          },
-          segment: {
-            borderColor: c => (c.p1.parsed.y >= 0 ? positiveColor : negativeColor)
-          },
-          borderWidth: 2,
-          tension: 0.15,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          pointHoverBackgroundColor: '#F0812A',
-          pointHoverBorderColor: '#F0812A'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'nearest', intersect: false },
-        onClick: (_event, elements) => {
-          if (elements.length > 0) {
-            navigateToTradesByDate(dailyData[elements[0].index].trade_date)
-          }
-        },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: 'rgba(17, 24, 39, 0.95)',
-            titleColor: '#fff',
-            bodyColor: '#e5e7eb',
-            padding: 8,
-            displayColors: false,
-            callbacks: {
-              label: ctx => `${currencySymbol.value}${Number(ctx.parsed.y).toLocaleString()}`
-            }
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: false,
-            grid: { color: 'rgba(156, 163, 175, 0.08)' },
-            ticks: {
-              font: { family: 'ui-monospace, SFMono-Regular, Menlo, monospace', size: 10 },
-              callback: v => currencySymbol.value + Number(v).toLocaleString()
-            }
-          },
-          x: {
-            grid: { display: false },
-            ticks: {
-              font: { family: 'ui-monospace, SFMono-Regular, Menlo, monospace', size: 10 },
-              maxRotation: 0,
-              autoSkipPadding: 24
-            }
-          }
-        }
-      }
-    })
-  } catch (error) {
-    console.error('[DASHBOARD] equity curve chart create failed:', error)
-  }
-}
-
-function createDistributionChart() {
-  if (distributionChartInstance) {
-    distributionChartInstance.destroy()
-  }
-
-  const ctx = distributionChart.value.getContext('2d')
-  const summary = analytics.value.summary
-  const isDark = document.documentElement.classList.contains('dark')
-
-  const wins = parseInt(summary.winningTrades) || 0
-  const losses = parseInt(summary.losingTrades) || 0
-  const breakeven = parseInt(summary.breakevenTrades) || 0
-
-  distributionChartInstance = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: ['Wins', 'Losses', 'Breakeven'],
-      datasets: [{
-        data: [wins, losses, breakeven],
-        backgroundColor: ['#10b981', '#ef4444', '#9ca3af'],
-        hoverBackgroundColor: ['#34d399', '#f87171', '#b0b5bf'],
-        borderWidth: 0,
-        hoverOffset: 6,
-        spacing: 4,
-        borderRadius: 20
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      rotation: -90,
-      circumference: 180,
-      cutout: '72%',
-      onClick: (event, elements) => {
-        if (elements.length > 0) {
-          const index = elements[0].index
-          const clickedSegment = ['profit', 'loss', 'breakeven'][index]
-          navigateToTradesByPnLType(clickedSegment)
-        }
-      },
-      animation: {
-        animateRotate: true,
-        duration: 800
-      },
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          backgroundColor: isDark ? '#374151' : '#1f2937',
-          titleColor: '#f9fafb',
-          bodyColor: '#d1d5db',
-          borderColor: isDark ? '#4b5563' : '#374151',
-          borderWidth: 1,
-          cornerRadius: 8,
-          padding: 10,
-          displayColors: true,
-          boxPadding: 4,
-          callbacks: {
-            label: function(context) {
-              const total = wins + losses + breakeven
-              const pct = total > 0 ? ((context.raw / total) * 100).toFixed(1) : 0
-              return ` ${context.raw} trades (${pct}%)`
-            }
-          }
-        }
-      }
-    }
-  })
-}
-
-function createWinRateChart() {
-  console.log('Dashboard: Creating win rate chart...')
-  console.log('Dashboard: winRateChart.value exists:', !!winRateChart.value)
-  console.log('Dashboard: dailyWinRate data:', analytics.value.dailyWinRate)
-  
-  if (winRateChartInstance) {
-    winRateChartInstance.destroy()
-  }
-  
-  const ctx = winRateChart.value.getContext('2d')
-  const winRateData = analytics.value.dailyWinRate || []
-  
-  console.log('Dashboard: Processed winRateData for chart:', winRateData)
-  
-  // Color each bar by its win rate using four discrete bands:
-  //   <40%      red    — meaningfully losing day
-  //   40–50%    orange — slightly underwater
-  //   50–60%    yellow — barely profitable
-  //   ≥60%      green  — solid winning day
-  const barColorPair = pct => {
-    const v = parseFloat(pct) || 0
-    if (v >= 60) return { fill: 'rgba(22, 163, 74, 0.7)',  border: '#16a34a' }  // green-600
-    if (v >= 50) return { fill: 'rgba(234, 179, 8, 0.7)',  border: '#eab308' }  // yellow-500
-    if (v >= 40) return { fill: 'rgba(240, 129, 42, 0.7)', border: '#F0812A' }  // primary orange
-    return         { fill: 'rgba(220, 38, 38, 0.7)',  border: '#dc2626' }       // red-600
-  }
-  const winRateColors = winRateData.map(d => barColorPair(d.win_rate))
-
-  // Cap P/L ratio display at 5.0 so a single outsized day doesn't squash
-  // the rest of the scale. Tooltips still show the true value.
-  const PL_DISPLAY_CAP = 5
-  const rawPlRatios = winRateData.map(d => parseFloat(d.pl_ratio) || 0)
-  const cappedPlRatios = rawPlRatios.map(v => Math.min(v, PL_DISPLAY_CAP))
-
-  winRateChartInstance = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: winRateData.map(d => formatTradeDate(d.trade_date, 'MMM dd')),
-      datasets: [
-        {
-          label: 'Win Rate (%)',
-          data: winRateData.map(d => parseFloat(d.win_rate) || 0),
-          backgroundColor: winRateColors.map(c => c.fill),
-          borderColor: winRateColors.map(c => c.border),
-          borderWidth: 1,
-          borderRadius: 4,
-          borderSkipped: false,
-          yAxisID: 'y'
-        },
-        {
-          type: 'line',
-          label: 'P/L Ratio',
-          data: cappedPlRatios,
-          showLine: false,
-          pointStyle: 'line',
-          pointRadius: 8,
-          pointHoverRadius: 10,
-          pointBorderColor: '#3f3f46',  // zinc-700
-          pointBorderWidth: 2,
-          yAxisID: 'yPL'
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      onClick: (event, elements) => {
-        if (elements.length > 0) {
-          const index = elements[0].index
-          const clickedDate = winRateData[index].trade_date
-          navigateToTradesByDate(clickedDate)
-        }
-      },
-      plugins: {
-        legend: {
-          display: true,
-          position: 'top',
-          align: 'end',
-          labels: {
-            usePointStyle: true,
-            boxWidth: 8,
-            font: { size: 11 }
-          }
-        },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              if (context.dataset.label === 'P/L Ratio') {
-                const raw = rawPlRatios[context.dataIndex] || 0
-                if (raw >= 999) return ' P/L Ratio: ∞ (no losses)'
-                if (raw > PL_DISPLAY_CAP) return ` P/L Ratio: ${raw.toFixed(2)} (capped at ${PL_DISPLAY_CAP} on chart)`
-                return ` P/L Ratio: ${raw.toFixed(2)}`
-              }
-              return ` Win Rate: ${(parseFloat(context.raw) || 0).toFixed(1)}%`
-            }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          max: 100,
-          position: 'left',
-          grid: {
-            color: 'rgba(156, 163, 175, 0.1)'
-          },
-          ticks: {
-            callback: function(value) {
-              return value + '%'
-            }
-          },
-          title: {
-            display: true,
-            text: 'Win Rate'
-          }
-        },
-        yPL: {
-          beginAtZero: true,
-          max: PL_DISPLAY_CAP,
-          position: 'right',
-          grid: { display: false },
-          ticks: {
-            callback: function(value) {
-              return value === PL_DISPLAY_CAP ? `${value}+` : value
-            }
-          },
-          title: {
-            display: true,
-            text: 'P/L Ratio'
-          }
-        },
-        x: {
-          grid: {
-            color: 'rgba(156, 163, 175, 0.1)'
-          }
-        }
-      }
-    }
-  })
-}
-
-function createCharts() {
-  console.log('Dashboard: createCharts called')
-  console.log('Dashboard: pnlChart.value exists:', !!pnlChart.value)
-  console.log('Dashboard: distributionChart.value exists:', !!distributionChart.value)
-  console.log('Dashboard: winRateChart.value exists:', !!winRateChart.value)
-  console.log('Dashboard: analytics.value exists:', !!analytics.value)
-  console.log('Dashboard: Chart.js imported:', typeof Chart)
-
-  // Create each chart independently based on whether its canvas ref exists
-  // This allows charts to render even if some layout sections are hidden
-  if (pnlChart.value) {
-    createPnLChart()
-  }
-  if (equityCurveCanvas.value) {
-    createEquityCurveChart()
-  }
-  if (distributionChart.value) {
-    createDistributionChart()
-  }
-  if (winRateChart.value) {
-    createWinRateChart()
-  }
-
-  // Log if any charts couldn't be created due to missing refs
-  if (!pnlChart.value || !distributionChart.value || !winRateChart.value) {
-    console.log('Dashboard: Some charts not created - canvas refs:', {
-      pnlChart: !!pnlChart.value,
-      distributionChart: !!distributionChart.value,
-      winRateChart: !!winRateChart.value
-    })
-  }
-}
-
 // Save filters to localStorage immediately when they change
 function saveFiltersToStorage() {
   try {
@@ -3293,16 +2918,6 @@ function navigateToTradesByPnLType(type) {
   })
 }
 
-// Watch for when loading finishes to try creating charts
-watch(loading, (newLoading) => {
-  if (!newLoading && analytics.value.dailyPnL?.length > 0) {
-    console.log('Dashboard: Loading finished, attempting to create charts')
-    setTimeout(() => {
-      createCharts()
-    }, 200)
-  }
-})
-
 // Watch for changes to timeRange and save immediately
 watch(() => filters.value.timeRange, (newRange) => {
   saveFiltersToStorage()
@@ -3392,32 +3007,23 @@ function startCountdown(intervalMs) {
 // Auto-update functionality
 function startAutoUpdate() {
   console.log('Dashboard: Starting auto-update check...')
-  clearInterval(updateInterval)
+  openPositionsPoller.stop()
   clearInterval(countdownInterval)
-  
+
   updateMarketStatus()
-  
+
   const refreshInterval = getRefreshInterval()
   console.log('Dashboard: Refresh interval from market hours:', refreshInterval)
-  
+
   if (refreshInterval && shouldRefreshPrices()) {
     console.log(`Dashboard: Setting up auto-update every ${refreshInterval/1000} seconds during market hours`)
     isAutoUpdating.value = true
-    
+
     // Start countdown
     startCountdown(refreshInterval)
-    
-    updateInterval = setInterval(async () => {
-      console.log('Dashboard: Auto-updating open positions and news...')
-      try {
-        // Only refresh open positions during market hours for price updates
-        await fetchOpenTrades({ fastFirst: false })
-        lastRefresh.value = new Date()
-        console.log('Dashboard: Auto-update completed successfully')
-      } catch (error) {
-        console.error('Dashboard: Auto-update failed:', error)
-      }
-    }, refreshInterval)
+
+    currentRefreshInterval = refreshInterval
+    openPositionsPoller.start()
   } else {
     console.log('Dashboard: No auto-update needed - market is closed')
     isAutoUpdating.value = false
@@ -3426,10 +3032,7 @@ function startAutoUpdate() {
 
 function stopAutoUpdate() {
   console.log('Dashboard: Stopping auto-update...')
-  if (updateInterval) {
-    clearInterval(updateInterval)
-    updateInterval = null
-  }
+  openPositionsPoller.stop()
   if (countdownInterval) {
     clearInterval(countdownInterval)
     countdownInterval = null
@@ -3446,10 +3049,10 @@ function checkMarketStatus() {
   const shouldRefresh = shouldRefreshPrices()
 
   // If market status changed, restart auto-update
-  if (shouldRefresh && !updateInterval) {
+  if (shouldRefresh && !openPositionsPoller.isActive.value) {
     console.log('Dashboard: Market opened - starting auto-updates')
     startAutoUpdate()
-  } else if (!shouldRefresh && updateInterval) {
+  } else if (!shouldRefresh && openPositionsPoller.isActive.value) {
     console.log('Dashboard: Market closed - stopping auto-updates')
     stopAutoUpdate()
   }
@@ -3504,8 +3107,6 @@ async function fetchExpiredOptionsCount() {
     console.error('[Dashboard] Error fetching expired options:', error)
   }
 }
-
-let marketStatusChecker = null
 
 function handleClickOutside(event) {
   if (showTimeRangeDropdown.value) {
@@ -3598,7 +3199,7 @@ onMounted(async () => {
   startAutoUpdate()
 
   // Check market status every minute to handle market open/close transitions
-  marketStatusChecker = setInterval(checkMarketStatus, 60000) // Check every minute
+  marketStatusPoller.start()
 })
 
 onUnmounted(() => {
@@ -3607,20 +3208,11 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('keydown', handleDashboardEscape)
 
-  // Stop auto-update (clears updateInterval and countdownInterval)
+  // Stop auto-update (stops the open-positions poller and countdown).
+  // The visibility-gated pollers also clean themselves up on scope dispose.
   stopAutoUpdate()
 
-  // Clear market status checker
-  if (marketStatusChecker) {
-    clearInterval(marketStatusChecker)
-    marketStatusChecker = null
-  }
-
-  // Defensive cleanup - ensure all intervals are cleared
-  if (updateInterval) {
-    clearInterval(updateInterval)
-    updateInterval = null
-  }
+  // Defensive cleanup - ensure the countdown interval is cleared
   if (countdownInterval) {
     clearInterval(countdownInterval)
     countdownInterval = null

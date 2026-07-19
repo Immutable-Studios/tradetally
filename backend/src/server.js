@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
@@ -62,7 +63,10 @@ const testimonialsRoutes = require('./routes/testimonials.routes');
 const supportRoutes = require('./routes/support.routes');
 const internalRoutes = require('./routes/internal.routes');
 const edgeReportRoutes = require('./routes/edgeReport.routes');
+const replayRoutes = require('./routes/replay.routes');
+const backtestRoutes = require('./routes/backtest.routes');
 const propFirmRoutes = require('./routes/propFirm.routes');
+const marketRiskRoutes = require('./routes/marketRisk.routes');
 const BillingService = require('./services/billingService');
 const priceMonitoringService = require('./services/priceMonitoringService');
 const backupScheduler = require('./services/backupScheduler.service');
@@ -100,6 +104,7 @@ const { isV1Request, sendV1Error } = require('./utils/apiResponse');
 const { ensureCsrfCookie, requireCsrf } = require('./middleware/csrf');
 const { createRateLimiter } = require('./utils/rateLimit');
 const { isBackgroundJobsDisabled } = require('./utils/runtimeScope');
+const { requireAdmin } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -161,6 +166,16 @@ const skipRateLimit = (req, res, next) => {
 app.use(securityMiddleware());
 app.use(requestIdMiddleware);
 
+// HTTP response compression (must never buffer Server-Sent Events)
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers.accept === 'text/event-stream') return false;
+    const contentType = res.getHeader('Content-Type');
+    if (typeof contentType === 'string' && contentType.includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  }
+}));
+
 // Optimized CORS configuration
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
@@ -198,7 +213,10 @@ const corsOptions = {
       callback(null, true);
     } else {
       logger.warn(`Origin ${origin} not allowed. Allowed origins: ${allowedOrigins.join(', ')}`, 'cors');
-      callback(new Error('Not allowed by CORS'));
+      const error = new Error('Origin is not allowed by CORS');
+      error.status = 403;
+      error.code = 'CORS_ORIGIN_DENIED';
+      callback(error);
     }
   },
   credentials: true,
@@ -295,7 +313,10 @@ app.use('/api/trial-feedback', trialFeedbackRoutes);
 app.use('/api/auth/passkey', passkeyRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/edge-reports', edgeReportRoutes);
+app.use('/api/replay', replayRoutes);
+app.use('/api/backtest', backtestRoutes);
 app.use('/api/prop-firm', propFirmRoutes);
+app.use('/api/market-risk', marketRiskRoutes);
 
 // OAuth2 Provider endpoints
 app.use('/oauth', oauth2Routes);
@@ -309,11 +330,12 @@ app.use('/og', ogRoutes);
 
 // Swagger API Documentation
 if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'true') {
-  app.get('/api-docs.json', (req, res) => {
+  const docsAuth = process.env.NODE_ENV === 'production' ? [requireAdmin] : [];
+  app.get('/api-docs.json', ...docsAuth, (req, res) => {
     res.json(buildSwaggerSpec(getApiDocsOrigin(req)));
   });
 
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(null, {
+  app.use('/api-docs', ...docsAuth, swaggerUi.serve, swaggerUi.setup(null, {
     explorer: true,
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'TradeTally API Documentation',
@@ -324,10 +346,37 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'tru
   logger.info('📚 Swagger documentation available at /api-docs');
 }
 
-// Health endpoint with database connection check and background worker status
+// Public liveness endpoint intentionally exposes no topology, filesystem, version,
+// capacity, or backup details. Operators can use the admin endpoint below.
 app.get('/api/health', async (req, res) => {
+  try {
+    const db = require('./config/database');
+    await db.query('SELECT 1');
+    res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  } catch (_) {
+    res.status(503).json({ status: 'DEGRADED', timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/system-health', requireAdmin, async (req, res) => {
   const health = await buildHealthStatus();
-  res.json(health);
+  res.status(health.status === 'OK' ? 200 : 503).json(health);
+});
+
+// Readiness probe for load-balancer failover. Returns 200 only when this node's
+// database is a writable PRIMARY; a streaming standby returns 503 so the load
+// balancer will not route to it until it has been promoted.
+app.get('/api/ready', async (req, res) => {
+  try {
+    const db = require('./config/database');
+    const { rows } = await db.query('SELECT pg_is_in_recovery() AS in_recovery');
+    if (rows[0] && rows[0].in_recovery === true) {
+      return res.status(503).json({ ready: false });
+    }
+    return res.status(200).json({ ready: true });
+  } catch (err) {
+    return res.status(503).json({ ready: false });
+  }
 });
 
 // CSP violation reporting endpoint (OWASP CWE-693 mitigation)
@@ -346,7 +395,6 @@ app.post('/api/csp-report', express.json({ type: 'application/csp-report' }), (r
 });
 
 // Admin endpoint to check enrichment status
-const { requireAdmin } = require('./middleware/auth');
 app.get('/api/admin/enrichment-status', requireAdmin, async (req, res) => {
   try {
     const db = require('./config/database');
@@ -812,6 +860,25 @@ function scheduleBackgroundServices(backgroundJobsDisabled) {
   }
 }
 
+// Detect a read-only standby (e.g. a streaming-replication hot standby).
+// Auto-detected via pg_is_in_recovery(); STANDBY_MODE=true/false overrides.
+// In standby mode the app performs NO boot-time writes (migrations, schema
+// repair, billing init) and starts NO background schedulers, so a warm-standby
+// box can run safely against a read-only replica without crashing or
+// double-processing jobs with shared credentials.
+async function detectStandbyMode() {
+  if (process.env.STANDBY_MODE === 'true') return true;
+  if (process.env.STANDBY_MODE === 'false') return false;
+  try {
+    const db = require('./config/database');
+    const result = await db.query('SELECT pg_is_in_recovery() AS in_recovery');
+    return !!(result.rows[0] && result.rows[0].in_recovery === true);
+  } catch (err) {
+    logger.warn(`Could not determine database recovery state (${err.message}); assuming primary.`, 'startup');
+    return false;
+  }
+}
+
 // Function to start server with migration
 async function startServer() {
   try {
@@ -820,38 +887,51 @@ async function startServer() {
     warnings.forEach((warning) => logger.warn(warning, 'startup'));
     const storageHealth = await storageHealthService.getHealth();
     storageHealth.warnings.forEach((warning) => logger.warn(warning, 'startup'));
-    const backgroundJobsDisabled = isBackgroundJobsDisabled();
+    // A read-only standby must never write on boot or start schedulers.
+    const standbyMode = await detectStandbyMode();
+    const backgroundJobsDisabled = isBackgroundJobsDisabled() || standbyMode;
+    if (standbyMode) {
+      logger.warn('STANDBY MODE: database is a read-only replica — skipping migrations, schema repair, billing init, and ALL background jobs. Promote the database and restart to run as primary.', 'startup');
+    }
 
     // Initialize PostHog telemetry (optional)
     await initializePostHogTelemetry();
 
-    // Run database migrations first
-    if (process.env.RUN_MIGRATIONS !== 'false') {
+    // Run database migrations first (never against a read-only standby)
+    if (standbyMode) {
+      logger.info('Standby: skipping migrations');
+    } else if (process.env.RUN_MIGRATIONS !== 'false') {
       logger.info('Running database migrations...');
       await migrate();
     } else {
       logger.info('Skipping migrations (RUN_MIGRATIONS=false)');
     }
 
-    const schemaRepair = await ensurePostExitSchema();
-    if (schemaRepair.repairedTradeColumns.length > 0 || schemaRepair.repairedUserSettingsColumns.length > 0) {
-      logger.warn(
-        `Repaired missing post-exit schema columns. trades: ${
-          schemaRepair.repairedTradeColumns.join(', ') || 'none'
-        }; user_settings: ${schemaRepair.repairedUserSettingsColumns.join(', ') || 'none'}`,
-        'startup'
-      );
-    }
+    if (!standbyMode) {
+      const schemaRepair = await ensurePostExitSchema();
+      if (schemaRepair.repairedTradeColumns.length > 0 || schemaRepair.repairedUserSettingsColumns.length > 0) {
+        logger.warn(
+          `Repaired missing post-exit schema columns. trades: ${
+            schemaRepair.repairedTradeColumns.join(', ') || 'none'
+          }; user_settings: ${schemaRepair.repairedUserSettingsColumns.join(', ') || 'none'}`,
+          'startup'
+        );
+      }
 
-    // Initialize billing service (conditional)
-    await BillingService.initialize();
+      // Initialize billing service (conditional)
+      await BillingService.initialize();
+    }
 
     // Start the server
     app.listen(PORT, () => {
       logger.info(`✓ TradeTally server running on port ${PORT}`);
       logger.info(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`✓ Log level: ${process.env.LOG_LEVEL || 'INFO'}`);
-      scheduleBackgroundServices(backgroundJobsDisabled);
+      if (standbyMode) {
+        logger.warn('STANDBY MODE: not starting any background schedulers.', 'startup');
+      } else {
+        scheduleBackgroundServices(backgroundJobsDisabled);
+      }
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

@@ -72,6 +72,42 @@ describe('broker sync duplicate protection', () => {
     });
   });
 
+  test('IBKR importTrades preserves parsed trade currency as originalCurrency', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    Trade.create.mockResolvedValue({ id: 'trade-1' });
+
+    const result = await ibkrService.importTrades('user-1', [
+      {
+        symbol: 'USO',
+        side: 'long',
+        quantity: 1,
+        entryPrice: 125,
+        entryTime: '2026-03-06T15:00:00Z',
+        tradeDate: '2026-03-06',
+        currency: 'USD',
+        executionData: [
+          {
+            datetime: '2026-03-06T15:00:00Z',
+            quantity: 1,
+            price: 125,
+            action: 'buy'
+          }
+        ]
+      }
+    ], {});
+
+    expect(result).toMatchObject({ imported: 1, failed: 0 });
+    expect(Trade.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        symbol: 'USO',
+        originalCurrency: 'USD',
+        exchangeRate: 1.0
+      }),
+      expect.any(Object)
+    );
+  });
+
   test('IBKR existing trade lookup is scoped to the incoming sync date range', async () => {
     db.query.mockResolvedValueOnce({ rows: [] });
 
@@ -658,6 +694,38 @@ describe('IBKR transient error handling', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  test('requestFlexReport returns the GetStatement URL supplied by IBKR', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: '<FlexStatementResponse><Status>Success</Status><ReferenceCode>REF-123</ReferenceCode><Url>https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement</Url></FlexStatementResponse>'
+    });
+
+    await expect(ibkrService.requestFlexReport('token', 'query')).resolves.toEqual({
+      referenceCode: 'REF-123',
+      statementUrl: 'https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement'
+    });
+  });
+
+  test('requestFlexReport falls back to ndcdyn when the response omits Url', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: '<FlexStatementResponse><Status>Success</Status><ReferenceCode>REF-123</ReferenceCode></FlexStatementResponse>'
+    });
+
+    await expect(ibkrService.requestFlexReport('token', 'query')).resolves.toMatchObject({
+      statementUrl: 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement'
+    });
+  });
+
+  test('fetchFlexReport polls the statement URL returned by SendRequest', async () => {
+    const statementUrl = 'https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement';
+    axios.get.mockResolvedValueOnce({ data: 'Symbol,Quantity,Price\nAAPL,10,150.50\n' });
+
+    await ibkrService.fetchFlexReport('REF-123', 'token', { maxWait: 60000, statementUrl });
+
+    expect(axios.get).toHaveBeenCalledWith(statementUrl, expect.objectContaining({
+      params: { t: 'token', q: 'REF-123', v: '3' }
+    }));
   });
 
   test('fetchFlexReport keeps polling when IBKR returns an unknown code with a "try again" message', async () => {

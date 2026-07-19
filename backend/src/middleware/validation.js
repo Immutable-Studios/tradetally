@@ -2,6 +2,7 @@ const Joi = require('joi');
 const { isV1Request, sendV1Error } = require('../utils/apiResponse');
 const { ALL_SCOPES } = require('../utils/apiScopes');
 const { sanitizeForLogging } = require('../utils/logSanitizer');
+const { INVISIBLE_CHARS_REGEX } = require('../utils/normalizeEmail');
 
 const WEBHOOK_EVENT_TYPES = Object.freeze([
   'trade.created',
@@ -33,7 +34,14 @@ const normalizeFieldNames = (body) => {
     tick_size: 'tickSize',
     point_value: 'pointValue',
     stop_loss: 'stopLoss',
-    take_profit: 'takeProfit'
+    take_profit: 'takeProfit',
+    original_currency: 'originalCurrency',
+    exchange_rate: 'exchangeRate',
+    original_entry_price_currency: 'originalEntryPriceCurrency',
+    original_exit_price_currency: 'originalExitPriceCurrency',
+    original_pnl_currency: 'originalPnlCurrency',
+    original_commission_currency: 'originalCommissionCurrency',
+    original_fees_currency: 'originalFeesCurrency'
   };
   
   Object.keys(fieldMappings).forEach(snakeCase => {
@@ -83,6 +91,13 @@ const validate = (schema) => {
 };
 
 const nullableString = (max = 255) => Joi.string().max(max).allow('', null);
+// Strip invisible characters mobile keyboards inject, trim, and lowercase
+// before validating - see utils/normalizeEmail.js (issue #362).
+const emailField = Joi.string()
+  .replace(INVISIBLE_CHARS_REGEX, '')
+  .trim()
+  .lowercase()
+  .email();
 // Date-only fields (DATE columns) must stay strings through validation.
 // Joi.date() converts to a UTC-midnight Date object, which pg serializes in
 // the server's LOCAL timezone - on servers west of UTC the stored DATE lands
@@ -93,11 +108,12 @@ const nullableDate = Joi.alternatives().try(
   Joi.valid(null, '')
 );
 const nullableNumber = Joi.alternatives().try(Joi.number(), Joi.valid(null, ''));
+const currencyCode = Joi.string().trim().uppercase().pattern(/^[A-Z]{3}$/).allow(null, '');
 const aiProviderSchema = Joi.string().valid('gemini', 'claude', 'openai', 'deepseek', 'kimi', 'ollama', 'lmstudio', 'perplexity', 'local');
 
 const schemas = {
   register: Joi.object({
-    email: Joi.string().email().required(),
+    email: emailField.required(),
     username: Joi.string().pattern(/^[a-zA-Z0-9_-]+$/).min(3).max(30).optional(),
     password: Joi.string().min(8).required(),
     fullName: Joi.string().max(255).allow(''),
@@ -120,9 +136,18 @@ const schemas = {
   }),
 
   login: Joi.object({
-    email: Joi.string().email().required(),
+    email: emailField.required(),
     password: Joi.string().required()
   }),
+
+  newsBackfill: Joi.object({
+    user_id: Joi.string().guid({ version: ['uuidv4'] }).optional(),
+    userId: Joi.string().guid({ version: ['uuidv4'] }).optional(),
+    batch_size: Joi.number().integer().min(1).max(100).optional(),
+    batchSize: Joi.number().integer().min(1).max(100).optional(),
+    max_trades: Joi.number().integer().min(1).max(10000).allow(null).optional(),
+    maxTrades: Joi.number().integer().min(1).max(10000).allow(null).optional()
+  }).oxor('user_id', 'userId').oxor('batch_size', 'batchSize').oxor('max_trades', 'maxTrades'),
 
   internalCrmSyncRun: Joi.object({
     targets: Joi.array()
@@ -141,7 +166,7 @@ const schemas = {
   }),
 
   forgotPassword: Joi.object({
-    email: Joi.string().email().required()
+    email: emailField.required()
   }),
 
   resetPassword: Joi.object({
@@ -174,6 +199,13 @@ const schemas = {
     entryCommission: Joi.number().default(0),  // Can be negative for rebates
     exitCommission: Joi.number().default(0),  // Can be negative for rebates
     fees: Joi.number().default(0),  // Can be negative for rebates
+    originalCurrency: currencyCode.default('USD'),
+    exchangeRate: Joi.number().positive().allow(null, ''),
+    originalEntryPriceCurrency: Joi.number().allow(null, ''),
+    originalExitPriceCurrency: Joi.number().allow(null, ''),
+    originalPnlCurrency: Joi.number().allow(null, ''),
+    originalCommissionCurrency: Joi.number().allow(null, ''),
+    originalFeesCurrency: Joi.number().allow(null, ''),
     mae: Joi.number().allow(null, ''),
     mfe: Joi.number().allow(null, ''),
     postExitMae: Joi.number().allow(null, ''),
@@ -325,6 +357,13 @@ const schemas = {
     entryCommission: Joi.number(),  // Can be negative for rebates
     exitCommission: Joi.number(),  // Can be negative for rebates
     fees: Joi.number(),  // Can be negative for rebates
+    originalCurrency: currencyCode,
+    exchangeRate: Joi.number().positive().allow(null, ''),
+    originalEntryPriceCurrency: Joi.number().allow(null, ''),
+    originalExitPriceCurrency: Joi.number().allow(null, ''),
+    originalPnlCurrency: Joi.number().allow(null, ''),
+    originalCommissionCurrency: Joi.number().allow(null, ''),
+    originalFeesCurrency: Joi.number().allow(null, ''),
     mae: Joi.number().allow(null, ''),
     mfe: Joi.number().allow(null, ''),
     postExitMae: Joi.number().allow(null, ''),
@@ -432,7 +471,11 @@ const schemas = {
     statisticsCalculation: Joi.string().valid('average', 'median'),
     analyticsPositionGrouping: Joi.boolean(),
     edgeReportEnabled: Joi.boolean(),
+    breakevenToleranceMode: Joi.string().valid('ticks', 'dollars'),
+    breakeven_tolerance_mode: Joi.string().valid('ticks', 'dollars'),
     breakevenToleranceTicks: Joi.number().integer().min(0).max(1000).allow(null),
+    breakevenToleranceDollars: Joi.number().min(0).max(1000000).allow(null),
+    breakeven_tolerance_dollars: Joi.number().min(0).max(1000000).allow(null),
     breakevenToleranceTicksByUnderlying: Joi.object()
       .pattern(/^[A-Za-z0-9]+$/, Joi.number().integer().min(0).max(1000))
       .allow(null),
@@ -458,7 +501,7 @@ const schemas = {
 
   // Mobile-specific validation schemas
   deviceLogin: Joi.object({
-    email: Joi.string().email().required(),
+    email: emailField.required(),
     password: Joi.string().required(),
     deviceInfo: Joi.object({
       name: Joi.string().max(255).required(),
@@ -688,9 +731,9 @@ const schemas = {
   }),
 
   billingAppleReceipt: Joi.object({
-    transaction_id: Joi.string().required(),
-    product_id: Joi.string().required(),
-    receipt_data: Joi.string().required(),
+    transaction_id: Joi.string().trim().max(255).required(),
+    product_id: Joi.string().trim().max(255).required(),
+    receipt_data: Joi.string().trim().max(100000).required(),
     environment: Joi.string().valid('Sandbox', 'Production', 'Xcode', 'LocalTesting').allow('', null)
   }),
 
@@ -718,15 +761,26 @@ const schemas = {
     flexQueryId: Joi.string().trim().required(),
     accountLabel: nullableString(255),
     autoSyncEnabled: Joi.boolean().default(false),
-    syncFrequency: Joi.string().valid('manual', 'hourly', 'daily', 'weekly').default('manual'),
+    syncFrequency: Joi.string().valid('manual', 'hourly', 'every_4_hours', 'every_6_hours', 'every_12_hours', 'daily').default('manual'),
     syncTime: nullableString(10),
     syncStartDate: nullableDate
+  }),
+
+  brokerSyncTrading212Connection: Joi.object({
+    api_key: Joi.string().trim().required(),
+    api_secret: Joi.string().trim().required(),
+    broker_environment: Joi.string().valid('live', 'demo').default('live'),
+    account_label: nullableString(255),
+    auto_sync_enabled: Joi.boolean().default(false),
+    sync_frequency: Joi.string().valid('manual', 'hourly', 'every_4_hours', 'every_6_hours', 'every_12_hours', 'daily').default('manual'),
+    sync_time: nullableString(10),
+    sync_start_date: nullableDate
   }),
 
   brokerSyncConnectionUpdate: Joi.object({
     accountLabel: nullableString(255),
     autoSyncEnabled: Joi.boolean(),
-    syncFrequency: Joi.string().valid('manual', 'hourly', 'daily', 'weekly'),
+    syncFrequency: Joi.string().valid('manual', 'hourly', 'every_4_hours', 'every_6_hours', 'every_12_hours', 'daily'),
     syncTime: nullableString(10),
     syncStartDate: nullableDate
   }).min(1),

@@ -19,6 +19,7 @@ jest.mock('../../src/utils/currencyConverter', () => ({
 }));
 
 const { parseCSV } = require('../../src/utils/csvParser');
+const calculationContracts = require('../../../tests/fixtures/trading-calculation-contracts.json');
 
 function buf(str) {
   return Buffer.from(str, 'utf-8');
@@ -90,6 +91,27 @@ describe('Lightspeed parser', () => {
     const trade = result.trades[0];
     // Commission should be populated (sum of entry + exit commissions)
     expect(trade.commission).toBeDefined();
+  });
+
+  // Lightspeed files carry Eastern wall-clock times; conversion to UTC must
+  // follow DST. A previous fixed +4h offset stored EST-season trades an hour
+  // early (see migration 220).
+  test('converts execution times as Eastern with DST handling', async () => {
+    const edtCSV = [
+      'Trade Number,Trade Date,Execution Time,Symbol,Side,Qty,Price,Commission Amount,FeeSEC,Buy/Sell,Principal Amount,NET Amount',
+      '1001,07/23/2025,16:33,AAPL,B,100,150.00,1.00,0.01,Long Buy,15000.00,14998.99'
+    ].join('\n');
+    const edt = await parseCSV(buf(edtCSV), 'lightspeed', {});
+    // 16:33 EDT = 20:33 UTC
+    expect(new Date(edt.trades[0].entryTime).toISOString()).toBe('2025-07-23T20:33:00.000Z');
+
+    const estCSV = [
+      'Trade Number,Trade Date,Execution Time,Symbol,Side,Qty,Price,Commission Amount,FeeSEC,Buy/Sell,Principal Amount,NET Amount',
+      '1001,01/15/2025,16:33,AAPL,B,100,150.00,1.00,0.01,Long Buy,15000.00,14998.99'
+    ].join('\n');
+    const est = await parseCSV(buf(estCSV), 'lightspeed', {});
+    // 16:33 EST = 21:33 UTC (the case the old +4h offset got wrong)
+    expect(new Date(est.trades[0].entryTime).toISOString()).toBe('2025-01-15T21:33:00.000Z');
   });
 });
 
@@ -371,6 +393,69 @@ describe('ThinkorSwim parser', () => {
       })
     ]));
   });
+
+  test('matches a later option closing import to an existing open option contract', async () => {
+    const closingCsv = [
+      'DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,Amount,Balance',
+      '06/22/2026,15:45:00,TRD,54321,SOLD -10 COIN 100 26 JUN 26 10 CALL @13.00,$0.00,-$1.30,$12998.70,$65000.00'
+    ].join('\n');
+
+    const existingExecution = {
+      action: 'buy',
+      quantity: 10,
+      price: 12.11,
+      datetime: '2026-06-18T09:30:00.000Z',
+      fees: 1.3
+    };
+
+    const existingPosition = {
+      id: 'open-option-1',
+      symbol: 'COIN',
+      side: 'long',
+      quantity: 10,
+      entryPrice: 12.11,
+      entryTime: '2026-06-18T09:30:00.000Z',
+      tradeDate: '2026-06-18',
+      commission: 1.3,
+      broker: 'thinkorswim',
+      executions: [existingExecution],
+      instrumentType: 'option',
+      strikePrice: 10,
+      expirationDate: '2026-06-26',
+      optionType: 'call'
+    };
+
+    const result = await parseCSV(buf(closingCsv), 'thinkorswim', {
+      existingPositions: {
+        'COIN_10_2026-06-26_call': existingPosition
+      },
+      existingExecutions: {
+        'COIN_10_2026-06-26_call': [existingExecution]
+      }
+    });
+
+    expectValidResult(result);
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]).toEqual(expect.objectContaining({
+      symbol: 'COIN',
+      side: 'long',
+      quantity: 10,
+      entryPrice: 12.11,
+      exitPrice: 13,
+      instrumentType: 'option',
+      strikePrice: 10,
+      expirationDate: '2026-06-26',
+      optionType: 'call',
+      isUpdate: true,
+      existingTradeId: 'open-option-1'
+    }));
+    expect(result.trades[0].executions).toHaveLength(2);
+    expect(result.trades[0].executions[1]).toMatchObject({
+      action: 'sell',
+      quantity: 10,
+      price: 13
+    });
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -640,6 +725,11 @@ describe('TradingView parser', () => {
     ].join('\n');
     const result = await parseCSV(buf(withCancelled), 'tradingview', {});
     expectValidResult(result);
+    expect(result.diagnostics.skippedRows).toBe(1);
+    expect(result.diagnostics.expected_skipped_rows).toBe(1);
+    expect(result.diagnostics.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('High skip rate')
+    ]));
   });
 
   test('keeps fractional order-history quantities from creating fake short open positions', async () => {
@@ -858,6 +948,34 @@ describe('PaperMoney parser', () => {
     expect(result.trades[0].exitPrice).toBe(24369.25);
     expect(result.trades[0].pnl).toBe(125);
   });
+
+  test('parses trade activity rows with Time Placed and uppercase PRICE', async () => {
+    const tradeActivityCSV = [
+      'Today\'s Trade Activity for 72074033SCHW (Trading) on 7/2/26 08:44:52',
+      'Notes,,Time Placed,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,PRICE,,TIF,Mark,Status',
+      ',,6/22/26 12:40:29,SINGLE,BUY,+1,TO OPEN,MRK,17 JUL 26,120,CALL,.52,LMT,GTC,9.225,FILLED',
+      ',,6/22/26 12:45:29,SINGLE,SELL,-1,TO CLOSE,MRK,17 JUL 26,120,CALL,.72,LMT,GTC,9.225,FILLED',
+      ',,6/29/26 09:37:41,STOCK,SELL,-58,TO CLOSE,VRTX,,,STOCK,~,MKT,GTC,519.85,WORKING',
+      ',,,RE #1006938727494,,,,,,,,460.78,STP,STD,,'
+    ].join('\n');
+
+    const result = await parseCSV(buf(tradeActivityCSV), 'auto', {});
+
+    expectValidResult(result);
+    expect(result.diagnostics.detectedBroker).toBe('papermoney');
+    expect(result.trades).toHaveLength(1);
+
+    const trade = result.trades[0];
+    expect(trade.symbol).toBe('MRK');
+    expect(trade.instrumentType).toBe('option');
+    expect(trade.expirationDate).toBe('2026-07-17');
+    expect(trade.strikePrice).toBe(120);
+    expect(trade.optionType).toBe('call');
+    expect(trade.quantity).toBe(1);
+    expect(trade.entryPrice).toBe(0.52);
+    expect(trade.exitPrice).toBe(0.72);
+    expect(trade.pnl).toBeCloseTo(20, 5);
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -992,6 +1110,28 @@ describe('E*TRADE parser', () => {
     // E*TRADE uses the generic row-by-row parser; individual rows become trades
     // Each row needs symbol, date, price > 0, quantity > 0 to pass isValidTrade
     expect(result.trades.length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('Dashboard-derived CSV import contracts', () => {
+  test.each(calculationContracts.csv_import_cases)('$id', async ({ csv, expected }) => {
+    const result = await parseCSV(buf(csv), 'auto', {
+      tradeGroupingSettings: { enabled: false }
+    });
+
+    expectValidResult(result);
+    expect(result.diagnostics.detectedBroker).toBe(expected.detected_broker);
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]).toEqual(expect.objectContaining({
+      symbol: expected.symbol,
+      broker: expected.broker,
+      side: expected.side,
+      quantity: expected.quantity,
+      entryPrice: expected.entry_price,
+      exitPrice: expected.exit_price,
+      tradeDate: expected.trade_date,
+      instrumentType: expected.instrument_type
+    }));
   });
 });
 

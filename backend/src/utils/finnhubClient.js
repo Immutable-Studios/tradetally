@@ -4,8 +4,9 @@ const aiService = require('./aiService');
 const historicalPriceCache = require('./historicalPriceCache');
 const ApiUsageService = require('../services/apiUsageService');
 const TierService = require('../services/tierService');
-const { validateAiProviderUrl } = require('./urlSecurity');
+const { validateAiProviderUrl, fetchAiProviderUrl } = require('./urlSecurity');
 const { FinnhubPriority, FinnhubRequestScheduler } = require('./finnhubScheduler');
+const { getDateInTimezone, localToUTC } = require('./timezone');
 
 class FinnhubClient {
   constructor() {
@@ -100,33 +101,39 @@ class FinnhubClient {
       return response.data;
     };
 
-    try {
-      return await this.scheduler.schedule(executeRequest, requestContext);
-    } catch (error) {
-      if (error.code && String(error.code).startsWith('FINNHUB_SCHEDULER_')) {
-        throw error;
-      }
-      if (error.response) {
-        // Handle 429 rate limit errors with exponential backoff
-        if (error.response.status === 429) {
-          console.log('Rate limit hit, waiting 5 seconds before retry...');
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          throw new Error(`Finnhub API rate limit exceeded: ${error.response.status} - ${error.response.data?.error || 'Rate limit reached'}`);
+    const MAX_RATE_LIMIT_RETRIES = 2;
+    let rateLimitRetries = 0;
+    let serverErrorRetried = false;
+
+    while (true) {
+      try {
+        return await this.scheduler.schedule(executeRequest, requestContext);
+      } catch (error) {
+        if (error.code && String(error.code).startsWith('FINNHUB_SCHEDULER_')) {
+          throw error;
         }
-        // Handle 502/503/504 server errors - these are temporary, retry once
-        if ([502, 503, 504].includes(error.response.status)) {
-          console.log(`Finnhub API server error ${error.response.status}, retrying once...`);
-          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-          try {
-            return await this.makeRequest(endpoint, params, context);
-          } catch (retryError) {
-            // If retry also fails, throw the original error
-            throw new Error(`Finnhub API error: ${error.response.status} - ${error.response.data?.error || 'Server error (retry failed)'}`);
+        if (error.response) {
+          // A 429 puts the scheduler into cooldown; re-queue the request and
+          // let the scheduler pace the retry once the provider window clears.
+          if (error.response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+            rateLimitRetries++;
+            console.warn(`[FINNHUB] 429 on ${endpoint}, re-queueing (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`);
+            continue;
           }
+          if (error.response.status === 429) {
+            throw new Error(`Finnhub API rate limit exceeded: ${error.response.status} - ${error.response.data?.error || 'Rate limit reached'}`);
+          }
+          // Handle 502/503/504 server errors - these are temporary, retry once
+          if ([502, 503, 504].includes(error.response.status) && !serverErrorRetried) {
+            serverErrorRetried = true;
+            console.log(`Finnhub API server error ${error.response.status}, retrying once...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+            continue;
+          }
+          throw new Error(`Finnhub API error: ${error.response.status} - ${error.response.data?.error || 'Unknown error'}`);
         }
-        throw new Error(`Finnhub API error: ${error.response.status} - ${error.response.data?.error || 'Unknown error'}`);
+        throw new Error(`Finnhub request failed: ${error.message}`);
       }
-      throw new Error(`Finnhub request failed: ${error.message}`);
     }
   }
 
@@ -144,36 +151,50 @@ class FinnhubClient {
     };
   }
 
+  // Shared tier/usage guard for metered endpoints. No-op without a userId.
+  // Throws an error carrying the code/resetAt/remaining (or feature) fields
+  // that mobile clients depend on - do not change the error shape.
+  async enforceUsageLimit(userId, endpoint, { defaultMessage = 'API limit exceeded', feature = null } = {}) {
+    if (!userId) return;
+
+    const userTier = await TierService.getUserTier(userId);
+    const limitCheck = await ApiUsageService.checkLimit(userId, endpoint, userTier);
+
+    if (!limitCheck.allowed) {
+      const error = new Error(limitCheck.message || defaultMessage);
+      if (feature) {
+        error.code = 'PRO_REQUIRED';
+        error.feature = feature;
+      } else {
+        error.code = limitCheck.upgradeRequired ? 'PRO_REQUIRED' : 'RATE_LIMIT_EXCEEDED';
+        error.resetAt = limitCheck.resetAt;
+        error.remaining = limitCheck.remaining;
+      }
+      throw error;
+    }
+  }
+
   async getQuote(symbol, userIdOrOptions = null, options = {}) {
     const normalizedContext = this.normalizeUserContext(userIdOrOptions, options);
     const userId = normalizedContext.userId;
     const requestOptions = normalizedContext.options;
     const symbolUpper = symbol.toUpperCase();
 
-    // Check tier and usage limits if userId provided
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'quote', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'API limit exceeded');
-        error.code = limitCheck.upgradeRequired ? 'PRO_REQUIRED' : 'RATE_LIMIT_EXCEEDED';
-        error.resetAt = limitCheck.resetAt;
-        error.remaining = limitCheck.remaining;
-        throw error;
-      }
-    }
-
     // Skip symbols that got 429'd and have never returned a successful quote
     if (this.isSymbolBlacklisted(symbolUpper)) {
       throw new Error(`Skipping ${symbol}: rate-limited and no prior successful quote`);
     }
 
-    // Check cache first
+    // Check cache first. Usage limits meter actual Finnhub API calls
+    // (trackApiCall below only fires on real hits), so cached responses are
+    // served before the tier/usage DB lookups.
     const cached = await cache.get('quote', symbolUpper);
     if (cached) {
       return cached;
     }
+
+    // Check tier and usage limits if userId provided
+    await this.enforceUsageLimit(userId, 'quote');
 
     try {
       const quote = await this.makeRequest('/quote', { symbol: symbolUpper }, {
@@ -450,9 +471,22 @@ class FinnhubClient {
     return results;
   }
 
-  async getCompanyProfile(symbol) {
+  // Enrichment context for endpoints that feed background pipelines
+  // (fundamentals, profiles, news). They queue behind active user requests
+  // and trickle out under the rate limit instead of competing with quotes.
+  enrichmentContext(source, options = {}) {
+    return {
+      source: options.source || source,
+      priority: options.priority ?? FinnhubPriority.BACKGROUND_ENRICHMENT,
+      background: options.background ?? true,
+      userId: options.userId,
+      maxQueueWaitMs: options.maxQueueWaitMs
+    };
+  }
+
+  async getCompanyProfile(symbol, options = {}) {
     const symbolUpper = symbol.toUpperCase();
-    
+
     // Check cache first (24 hour TTL for company profiles)
     const cached = await cache.get('company_profile', symbolUpper);
     if (cached) {
@@ -460,7 +494,7 @@ class FinnhubClient {
     }
 
     try {
-      const profile = await this.makeRequest('/stock/profile2', { symbol: symbolUpper });
+      const profile = await this.makeRequest('/stock/profile2', { symbol: symbolUpper }, this.enrichmentContext('company_profile', options));
       
       // Cache the result
       await cache.set('company_profile', symbolUpper, profile);
@@ -472,7 +506,7 @@ class FinnhubClient {
     }
   }
 
-  async getCompanyNews(symbol, fromDate = null, toDate = null) {
+  async getCompanyNews(symbol, fromDate = null, toDate = null, options = {}) {
     const symbolUpper = symbol.toUpperCase();
     const to = toDate || new Date().toISOString().split('T')[0];
     const from = fromDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -487,11 +521,11 @@ class FinnhubClient {
     }
 
     try {
-      const news = await this.makeRequest('/company-news', { 
+      const news = await this.makeRequest('/company-news', {
         symbol: symbolUpper,
         from,
         to
-      });
+      }, this.enrichmentContext('company_news', options));
       
       // Cache the result
       await cache.set('company_news', cacheKey, news);
@@ -499,176 +533,6 @@ class FinnhubClient {
       return news;
     } catch (error) {
       console.warn(`Failed to get company news for ${symbol}: ${error.message}`);
-      throw error;
-    }
-  }
-
-  async getStockCandles(symbol, resolution = '1', from, to, userIdOrOptions = null, options = {}) {
-    const normalizedContext = this.normalizeUserContext(userIdOrOptions, options);
-    const userId = normalizedContext.userId;
-    const requestOptions = normalizedContext.options;
-    const symbolUpper = symbol.toUpperCase();
-
-    // Check tier and usage limits if userId provided
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'candle', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'API limit exceeded');
-        error.code = limitCheck.upgradeRequired ? 'PRO_REQUIRED' : 'RATE_LIMIT_EXCEEDED';
-        error.resetAt = limitCheck.resetAt;
-        error.remaining = limitCheck.remaining;
-        throw error;
-      }
-    }
-
-    // Create cache key with parameters
-    const cacheKey = `${symbolUpper}_${resolution}_${from}_${to}`;
-
-    // Check cache first (5 minute TTL for recent candle data)
-    const cached = await cache.get('stock_candles', cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    try {
-      const candles = await this.makeRequest('/stock/candle', {
-        symbol: symbolUpper,
-        resolution,
-        from,
-        to
-      }, {
-        source: requestOptions.source || 'stock_candles',
-        priority: requestOptions.priority ?? (userId ? FinnhubPriority.ACTIVE_CANDLE : FinnhubPriority.ACTIVE_OTHER),
-        userId,
-        background: requestOptions.background,
-        maxQueueWaitMs: requestOptions.maxQueueWaitMs
-      });
-
-      // Validate candles data
-      if (!candles || candles.s !== 'ok' || !candles.c || candles.c.length === 0) {
-        throw new Error(`No candle data available for ${symbol}`);
-      }
-
-      // Convert to standard format
-      const formattedCandles = [];
-      for (let i = 0; i < candles.c.length; i++) {
-        formattedCandles.push({
-          time: candles.t[i],
-          open: candles.o[i],
-          high: candles.h[i],
-          low: candles.l[i],
-          close: candles.c[i],
-          volume: candles.v[i]
-        });
-      }
-
-      // Cache the result
-      await cache.set('stock_candles', cacheKey, formattedCandles);
-
-      // Track usage if userId provided
-      if (userId) {
-        await ApiUsageService.trackApiCall(userId, 'candle');
-      }
-
-      return formattedCandles;
-    } catch (error) {
-      console.warn(`Failed to get stock candles for ${symbol}: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // Get candle data for a trade.
-  // options.resolution: 'D' (daily) or '5' (5-minute) forces a specific resolution
-  // and an appropriate date window. When omitted, the legacy auto-selection based
-  // on the trade duration is used (single trade day, 1/5/15-min or daily).
-  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, options = {}) {
-    const forcedResolution = options.resolution || null;
-
-    // Log the dates we're working with to debug timezone issues
-    console.log('getTradeChartData input dates:', {
-      entryDate,
-      exitDate,
-      forcedResolution,
-      entryDateString: new Date(entryDate).toString(),
-      exitDateString: exitDate ? new Date(exitDate).toString() : 'none'
-    });
-
-    const entryTime = new Date(entryDate);
-    const exitTime = exitDate ? new Date(exitDate) : new Date();
-    const tradeDuration = exitTime - entryTime;
-    const oneDayMs = 24 * 60 * 60 * 1000;
-
-    // Trade day(s) in UTC to avoid timezone issues
-    const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
-
-    let resolution, intervalName, chartFromTime, chartToTime;
-
-    if (forcedResolution === 'D') {
-      // Daily chart: show broad context around the entire trade
-      // (~90 days before entry through ~14 days after exit, capped at now).
-      resolution = 'D';
-      intervalName = 'daily';
-      chartFromTime = new Date(entryDateUTC.getTime() - 90 * oneDayMs);
-      chartToTime = new Date(Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now()));
-    } else if (forcedResolution === '5') {
-      // 5-minute chart: focus on the trade day(s) with extended trading hours.
-      // 4:00 AM ET (~09:00 UTC) on the entry day to 8:00 PM ET (~01:00 UTC next day)
-      // on the exit day. ET assumed UTC-5 for simplicity; covers most sessions.
-      resolution = '5';
-      intervalName = '5min';
-      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-      chartToTime = new Date(exitDateUTC.getTime() + 25 * 60 * 60 * 1000);
-    } else {
-      // Legacy auto-selection: single trade day window, resolution by duration.
-      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-      chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
-      const chartDuration = chartToTime - chartFromTime;
-      if (chartDuration <= 7 * oneDayMs) {
-        resolution = '1';
-        intervalName = '1min';
-      } else if (chartDuration <= 30 * oneDayMs) {
-        resolution = '5';
-        intervalName = '5min';
-      } else if (chartDuration <= 90 * oneDayMs) {
-        resolution = '15';
-        intervalName = '15min';
-      } else {
-        resolution = 'D';
-        intervalName = 'daily';
-      }
-    }
-
-    // Convert to Unix timestamps
-    const fromTimestamp = Math.floor(chartFromTime.getTime() / 1000);
-    const toTimestamp = Math.floor(chartToTime.getTime() / 1000);
-
-    console.log('Chart window calculation:', {
-      resolution,
-      intervalName,
-      entryTime: entryTime.toISOString(),
-      exitTime: exitTime.toISOString(),
-      chartFromTime: chartFromTime.toISOString(),
-      chartToTime: chartToTime.toISOString(),
-      fromTimestamp,
-      toTimestamp,
-      tradeDuration: `${tradeDuration / 1000 / 60} minutes`
-    });
-
-    try {
-      const candles = await this.getStockCandles(symbol, resolution, fromTimestamp, toTimestamp, userId);
-
-      return {
-        type: resolution === 'D' ? 'daily' : 'intraday',
-        interval: intervalName,
-        resolution,
-        candles: candles,
-        source: 'finnhub'
-      };
-    } catch (error) {
-      console.error(`Error fetching Finnhub chart data for ${symbol}:`, error);
       throw error;
     }
   }
@@ -856,7 +720,8 @@ class FinnhubClient {
         
         const openai = new OpenAI({ 
           apiKey: settings.default_ai_api_key,
-          baseURL: validatedBaseUrl || undefined
+          baseURL: validatedBaseUrl || undefined,
+          fetch: (url, init) => fetchAiProviderUrl('openai', url, init)
         });
         
         // Note: Some OpenAI models (like o1-preview) don't support temperature parameter
@@ -904,7 +769,8 @@ class FinnhubClient {
 
         const client = new OpenAI({
           apiKey: settings.default_ai_api_key,
-          baseURL: validatedBaseUrl
+          baseURL: validatedBaseUrl,
+          fetch: (url, init) => fetchAiProviderUrl(settings.default_ai_provider, url, init)
         });
 
         const modelName = settings.default_ai_model || defaultModel;
@@ -921,7 +787,6 @@ class FinnhubClient {
         return response.choices[0]?.message?.content?.trim() || '';
 
       } else if (settings.default_ai_provider === 'ollama') {
-        const { default: fetch } = await import('node-fetch');
         const validatedApiUrl = await validateAiProviderUrl('ollama', settings.default_ai_api_url);
         
         const headers = {
@@ -933,7 +798,7 @@ class FinnhubClient {
           headers['Authorization'] = `Bearer ${settings.default_ai_api_key}`;
         }
         
-        const response = await fetch(`${validatedApiUrl.toString().replace(/\/$/, '')}/api/generate`, {
+        const response = await fetchAiProviderUrl('ollama', `${validatedApiUrl.toString().replace(/\/$/, '')}/api/generate`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -973,8 +838,6 @@ class FinnhubClient {
 
         return response.content[0]?.text?.trim() || '';
       } else if (settings.default_ai_provider === 'lmstudio') {
-        const { default: fetch } = await import('node-fetch');
-        
         // LM Studio defaults to localhost:1234
         const apiUrl = settings.default_ai_api_url || 'http://localhost:1234';
         const validatedApiUrl = await validateAiProviderUrl('lmstudio', apiUrl);
@@ -982,7 +845,7 @@ class FinnhubClient {
         console.log('[LMSTUDIO] Using LM Studio for system AI at:', validatedApiUrl.toString());
         
         try {
-          const response = await fetch(`${validatedApiUrl.toString().replace(/\/$/, '')}/v1/chat/completions`, {
+          const response = await fetchAiProviderUrl('lmstudio', `${validatedApiUrl.toString().replace(/\/$/, '')}/v1/chat/completions`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1009,8 +872,6 @@ class FinnhubClient {
           throw new Error(`LM Studio failed: ${error.message}`);
         }
       } else if (settings.default_ai_provider === 'perplexity') {
-        const { default: fetch } = await import('node-fetch');
-        
         if (!settings.default_ai_api_key) {
           throw new Error('Perplexity API key not configured');
         }
@@ -1018,7 +879,7 @@ class FinnhubClient {
         console.log('[PERPLEXITY] Using Perplexity for system AI CUSIP resolution');
         
         try {
-          const response = await fetch('https://api.perplexity.ai/chat/completions', {
+          const response = await fetchAiProviderUrl('perplexity', 'https://api.perplexity.ai/chat/completions', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1048,7 +909,6 @@ class FinnhubClient {
           throw new Error(`Perplexity system AI failed: ${error.message}`);
         }
       } else if (settings.default_ai_provider === 'local') {
-        const { default: fetch } = await import('node-fetch');
         const validatedApiUrl = await validateAiProviderUrl('local', settings.default_ai_api_url);
         
         const headers = {
@@ -1059,7 +919,7 @@ class FinnhubClient {
           headers['Authorization'] = `Bearer ${settings.default_ai_api_key}`;
         }
         
-        const response = await fetch(validatedApiUrl.toString(), {
+        const response = await fetchAiProviderUrl('local', validatedApiUrl.toString(), {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -1408,17 +1268,10 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
   // Get technical indicators (Pro only)
   async getTechnicalIndicator(symbol, resolution, from, to, indicator, indicatorFields = {}, userId = null) {
     // Check tier - this is a Pro feature
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'indicator', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'Technical indicators require a Pro subscription');
-        error.code = 'PRO_REQUIRED';
-        error.feature = 'Technical Indicators';
-        throw error;
-      }
-    }
+    await this.enforceUsageLimit(userId, 'indicator', {
+      defaultMessage: 'Technical indicators require a Pro subscription',
+      feature: 'Technical Indicators'
+    });
 
     const symbolUpper = symbol.toUpperCase();
 
@@ -1456,17 +1309,10 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
   // Get pattern recognition (Pro only)
   async getPatternRecognition(symbol, resolution, userId = null) {
     // Check tier - this is a Pro feature
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'pattern', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'Pattern recognition requires a Pro subscription');
-        error.code = 'PRO_REQUIRED';
-        error.feature = 'Pattern Recognition';
-        throw error;
-      }
-    }
+    await this.enforceUsageLimit(userId, 'pattern', {
+      defaultMessage: 'Pattern recognition requires a Pro subscription',
+      feature: 'Pattern Recognition'
+    });
 
     const symbolUpper = symbol.toUpperCase();
 
@@ -1498,17 +1344,10 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
   // Get support and resistance levels (Pro only)
   async getSupportResistance(symbol, resolution, userId = null) {
     // Check tier - this is a Pro feature
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'support_resistance', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'Support/Resistance levels require a Pro subscription');
-        error.code = 'PRO_REQUIRED';
-        error.feature = 'Support/Resistance Levels';
-        throw error;
-      }
-    }
+    await this.enforceUsageLimit(userId, 'support_resistance', {
+      defaultMessage: 'Support/Resistance levels require a Pro subscription',
+      feature: 'Support/Resistance Levels'
+    });
 
     const symbolUpper = symbol.toUpperCase();
 
@@ -1553,8 +1392,8 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
       return [];
     }
 
-    const cacheKey = `stock_splits_${symbol}_${from}_${to}`;
-    const cached = await cache.get(cacheKey);
+    const cacheKey = `${symbol}_${from}_${to}`;
+    const cached = await cache.get('stock_splits', cacheKey);
     if (cached) {
       console.log(`Using cached stock splits for ${symbol}`);
       return cached;
@@ -1577,7 +1416,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
       });
       
       // Cache for 24 hours since splits are historical data
-      await cache.set(cacheKey, response, 86400);
+      await cache.set('stock_splits', cacheKey, response, 24 * 60 * 60 * 1000);
       
       return response || [];
     } catch (error) {
@@ -1596,28 +1435,19 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
     const requestOptions = normalizedContext.options;
     const symbolUpper = symbol.toUpperCase();
 
-    // Check tier and usage limits if userId provided
-    if (userId) {
-      const userTier = await TierService.getUserTier(userId);
-      const limitCheck = await ApiUsageService.checkLimit(userId, 'candle', userTier);
-
-      if (!limitCheck.allowed) {
-        const error = new Error(limitCheck.message || 'API limit exceeded');
-        error.code = limitCheck.upgradeRequired ? 'PRO_REQUIRED' : 'RATE_LIMIT_EXCEEDED';
-        error.resetAt = limitCheck.resetAt;
-        error.remaining = limitCheck.remaining;
-        throw error;
-      }
-    }
-
     // Create cache key with parameters
     const cacheKey = `${symbolUpper}_${resolution}_${from}_${to}`;
 
-    // Check cache first (5 minute TTL for recent candle data)
+    // Check cache first (5 minute TTL for recent candle data). Usage limits
+    // meter actual Finnhub API calls (trackApiCall below only fires on real
+    // hits), so cached responses are served before the tier/usage DB lookups.
     const cached = await cache.get('stock_candles', cacheKey);
     if (cached) {
       return cached;
     }
+
+    // Check tier and usage limits if userId provided
+    await this.enforceUsageLimit(userId, 'candle');
 
     try {
       const candles = await this.makeRequest('/stock/candle', {
@@ -1666,75 +1496,65 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
     }
   }
 
-  // Get candle data for a trade.
-  // options.resolution: 'D' (daily) or '5' (5-minute) forces a specific resolution
-  // and an appropriate date window. When omitted, the legacy auto-selection based
-  // on the trade duration is used (single trade day, 1/5/15-min or daily).
-  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, options = {}) {
-    const forcedResolution = options.resolution || null;
-
+  // Get appropriate candle data based on trade duration for Pro users.
+  // requestedResolution: '1', '5', '15', '60' or 'D'. Forces a specific
+  // resolution/window; defaults to a 1-minute intraday view of the trade day.
+  async getTradeChartData(symbol, entryDate, exitDate = null, userId = null, requestedResolution = '1') {
     // Log the dates we're working with to debug timezone issues
     console.log('getTradeChartData input dates:', {
       entryDate,
       exitDate,
-      forcedResolution,
+      requestedResolution,
       entryDateString: new Date(entryDate).toString(),
       exitDateString: exitDate ? new Date(exitDate).toString() : 'none'
     });
-
+    
     const entryTime = new Date(entryDate);
     const exitTime = exitDate ? new Date(exitDate) : new Date();
     const tradeDuration = exitTime - entryTime;
     const oneDayMs = 24 * 60 * 60 * 1000;
 
-    // Trade day(s) in UTC to avoid timezone issues
-    const entryDateUTC = new Date(entryTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    const exitDateUTC = new Date(exitTime.toISOString().split('T')[0] + 'T00:00:00.000Z');
+    // Focus on the actual trade day only.
+    // Use the date as seen on a US exchange — the UTC date rolls over at
+    // 8:00 PM ET, which would chart the wrong day for after-hours trades.
+    const MARKET_TZ = 'America/New_York';
+    const tradeDateET = getDateInTimezone(entryTime, MARKET_TZ, false);
+    const exitDateET = getDateInTimezone(exitTime, MARKET_TZ, false);
 
-    let resolution, intervalName, chartFromTime, chartToTime;
+    // Set chart window to show extended trading hours across the trade day(s)
+    // Pre-market: 4:00 AM ET to 9:30 AM ET
+    // Regular hours: 9:30 AM ET to 4:00 PM ET
+    // After-hours: 4:00 PM ET to 8:00 PM ET
+    // localToUTC is DST-aware (handles both EST and EDT)
+    let chartFromTime = new Date(localToUTC(`${tradeDateET}T04:00:00`, MARKET_TZ));
+    let chartToTime = new Date(localToUTC(`${exitDateET}T20:00:00`, MARKET_TZ));
+    const intervals = {
+      '1': '1min',
+      '5': '5min',
+      '15': '15min',
+      '60': '1hour',
+      D: 'daily'
+    };
+    const resolution = Object.hasOwn(intervals, requestedResolution) ? requestedResolution : '1';
 
-    if (forcedResolution === 'D') {
-      // Daily chart: show broad context around the entire trade
-      // (~90 days before entry through ~14 days after exit, capped at now).
-      resolution = 'D';
-      intervalName = 'daily';
-      chartFromTime = new Date(entryDateUTC.getTime() - 90 * oneDayMs);
-      chartToTime = new Date(Math.min(exitDateUTC.getTime() + 14 * oneDayMs, Date.now()));
-    } else if (forcedResolution === '5') {
-      // 5-minute chart: focus on the trade day(s) with extended trading hours.
-      // 4:00 AM ET (~09:00 UTC) on the entry day to 8:00 PM ET (~01:00 UTC next day)
-      // on the exit day. ET assumed UTC-5 for simplicity; covers most sessions.
-      resolution = '5';
-      intervalName = '5min';
-      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-      chartToTime = new Date(exitDateUTC.getTime() + 25 * 60 * 60 * 1000);
-    } else {
-      // Legacy auto-selection: single trade day window, resolution by duration.
-      chartFromTime = new Date(entryDateUTC.getTime() + 9 * 60 * 60 * 1000);
-      chartToTime = new Date(entryDateUTC.getTime() + 25 * 60 * 60 * 1000);
-      const chartDuration = chartToTime - chartFromTime;
-      if (chartDuration <= 7 * oneDayMs) {
-        resolution = '1';
-        intervalName = '1min';
-      } else if (chartDuration <= 30 * oneDayMs) {
-        resolution = '5';
-        intervalName = '5min';
-      } else if (chartDuration <= 90 * oneDayMs) {
-        resolution = '15';
-        intervalName = '15min';
-      } else {
-        resolution = 'D';
-        intervalName = 'daily';
-      }
+    if (resolution === 'D') {
+      chartFromTime = new Date(entryTime.getTime() - 30 * oneDayMs);
+      chartToTime = new Date(Math.max(entryTime.getTime(), exitTime.getTime()) + 10 * oneDayMs);
     }
+
+    console.log('Focusing chart on single trading day:', {
+      tradeDate: tradeDateET,
+      entryTime: entryTime.toISOString(),
+      chartFrom: chartFromTime.toISOString(),
+      chartTo: chartToTime.toISOString(),
+      windowHours: ((chartToTime - chartFromTime) / (1000 * 60 * 60)).toFixed(1)
+    });
 
     // Convert to Unix timestamps
     const fromTimestamp = Math.floor(chartFromTime.getTime() / 1000);
     const toTimestamp = Math.floor(chartToTime.getTime() / 1000);
-
+    
     console.log('Chart window calculation:', {
-      resolution,
-      intervalName,
       entryTime: entryTime.toISOString(),
       exitTime: exitTime.toISOString(),
       chartFromTime: chartFromTime.toISOString(),
@@ -1745,6 +1565,9 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
     });
 
     try {
+      const intervalName = intervals[resolution];
+      console.log(`Fetching ${intervalName} Finnhub data for ${symbol}`);
+      
       const candles = await this.getStockCandles(symbol, resolution, fromTimestamp, toTimestamp, userId);
 
       return {
@@ -1807,8 +1630,9 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
 
       const rate = parseFloat(response.quote[targetUpper]);
 
-      // Cache the result
-      await cache.set('forex_rates', cacheKey, rate);
+      // Cache the result (explicit TTL: the value is numeric, so the 3-arg
+      // form would be misread as a direct-key set with a TTL)
+      await cache.set('forex_rates', cacheKey, rate, 24 * 60 * 60 * 1000);
 
       console.log(`Finnhub forex rate for ${baseUpper}/${targetUpper} on ${formattedDate}: ${rate}`);
       return rate;
@@ -1872,7 +1696,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
    * @param {string} frequency - 'annual' or 'quarterly'
    * @returns {Promise<Object>} Financial statements data
    */
-  async getFinancialStatements(symbol, frequency = 'annual') {
+  async getFinancialStatements(symbol, frequency = 'annual', options = {}) {
     const symbolUpper = symbol.toUpperCase();
 
     // Create cache key
@@ -1892,7 +1716,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
         symbol: symbolUpper,
         statement: 'bs,ic,cf', // Balance sheet, income statement, cash flow
         freq: frequency
-      });
+      }, this.enrichmentContext('financial_statements', options));
 
       if (!data || !data.financials || data.financials.length === 0) {
         console.warn(`[FINANCIALS] No financial data available for ${symbolUpper}`);
@@ -1916,7 +1740,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
    * @param {string} symbol - Stock symbol
    * @returns {Promise<Object>} Key financial metrics
    */
-  async getBasicFinancials(symbol) {
+  async getBasicFinancials(symbol, options = {}) {
     const symbolUpper = symbol.toUpperCase();
 
     // Create cache key
@@ -1935,7 +1759,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
       const data = await this.makeRequest('/stock/metric', {
         symbol: symbolUpper,
         metric: 'all'
-      });
+      }, this.enrichmentContext('basic_financials', options));
 
       if (!data || !data.metric) {
         console.warn(`[METRICS] No metrics data available for ${symbolUpper}`);
@@ -1960,7 +1784,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
    * @param {string} frequency - 'annual' or 'quarterly'
    * @returns {Promise<Object>} Reported financial data
    */
-  async getFinancialsReported(symbol, frequency = 'annual') {
+  async getFinancialsReported(symbol, frequency = 'annual', options = {}) {
     const symbolUpper = symbol.toUpperCase();
 
     // Create cache key
@@ -1979,7 +1803,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
       const data = await this.makeRequest('/stock/financials-reported', {
         symbol: symbolUpper,
         freq: frequency
-      });
+      }, this.enrichmentContext('financials_reported', options));
 
       if (!data || !data.data || data.data.length === 0) {
         console.warn(`[REPORTED] No reported financial data available for ${symbolUpper}`);
@@ -2003,7 +1827,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
    * @param {string} symbol - Crypto symbol (e.g., 'BTC', 'ETH')
    * @returns {Promise<Object>} Crypto profile data
    */
-  async getCryptoProfile(symbol) {
+  async getCryptoProfile(symbol, options = {}) {
     const symbolUpper = symbol.toUpperCase();
 
     // Create cache key
@@ -2021,7 +1845,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
 
       const data = await this.makeRequest('/crypto/profile', {
         symbol: symbolUpper
-      });
+      }, this.enrichmentContext('crypto_profile', options));
 
       if (!data || !data.name) {
         console.warn(`[CRYPTO] No profile data available for ${symbolUpper}`);
@@ -2047,7 +1871,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
    * @param {string} to - End date (YYYY-MM-DD)
    * @returns {Promise<Array>} Array of dividend objects with date, amount, payDate, etc.
    */
-  async getDividends(symbol, from = null, to = null) {
+  async getDividends(symbol, from = null, to = null, options = {}) {
     const symbolUpper = symbol.toUpperCase();
 
     // Default to last 2 years if no dates provided
@@ -2077,7 +1901,7 @@ Please provide just the ticker symbol (like "AAPL" for Apple). If you don't know
         symbol: symbolUpper,
         from: from,
         to: to
-      });
+      }, this.enrichmentContext('dividends', options));
 
       // Finnhub returns an array of dividend objects:
       // { symbol, date, amount, adjustedAmount, payDate, recordDate, declarationDate, currency }

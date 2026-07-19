@@ -246,7 +246,7 @@
       </div>
 
       <!-- Show trades when available -->
-      <div v-else :key="tradesStore.trades.length">
+      <div v-else>
         <!-- Bulk Actions Bar -->
         <div v-if="selectedTrades.length > 0" class="mb-6 p-4 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-lg">
           <div class="flex items-center justify-between">
@@ -282,7 +282,7 @@
         </div>
 
         <!-- Mobile view (cards) -->
-        <div class="block md:hidden space-y-4" :key="'mobile-' + tradesStore.trades.length">
+        <div class="block md:hidden space-y-4">
         <div v-for="trade in tradesStore.trades" :key="trade.id" 
              class="bg-white dark:bg-gray-800 shadow rounded-lg p-4 hover:shadow-md transition-shadow">
           <div class="flex items-start space-x-3 mb-3">
@@ -315,22 +315,23 @@
                   ]">
                   {{ trade.side }}
                 </span>
+                <TradeMarketSessionBadge :trade="trade" />
                 <!-- News badge for mobile -->
                 <span v-if="trade.has_news" 
                   :class="getNewsBadgeClasses(trade.news_sentiment)"
                   class="px-2 py-1 text-xs font-semibold rounded-full flex items-center"
-                  :title="`${trade.news_events?.length || 0} news article(s) - ${trade.news_sentiment || 'neutral'} sentiment`">
+                  :title="`${trade.news_event_count ?? trade.news_events?.length ?? 0} news article(s) - ${trade.news_sentiment || 'neutral'} sentiment`">
                   <MdiIcon :icon="newspaperIcon" :size="14" class="mr-1" />
-                  <span>{{ trade.news_events?.length || 0 }}</span>
+                  <span>{{ trade.news_event_count ?? trade.news_events?.length ?? 0 }}</span>
                 </span>
               </div>
             <span class="px-2 py-1 text-xs font-semibold rounded-full"
               :class="[
-                trade.exit_price
+                !isTradeOpen(trade)
                   ? 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
                   : 'bg-primary-100 text-primary-800 dark:bg-primary-900/20 dark:text-primary-400'
               ]">
-              {{ trade.exit_price ? 'Closed' : 'Open' }}
+              {{ isTradeOpen(trade) ? 'Open' : 'Closed' }}
             </span>
           </div>
           
@@ -345,12 +346,12 @@
             </div>
             <div>
               <div class="text-gray-500 dark:text-gray-400">Entry</div>
-              <div class="text-gray-900 dark:text-white">{{ formatCurrency(trade.entry_price) }}</div>
+              <div class="text-gray-900 dark:text-white">{{ formatTradeCurrency(trade.entry_price, trade) }}</div>
             </div>
             <div>
               <div class="text-gray-500 dark:text-gray-400">Exit</div>
               <div class="text-gray-900 dark:text-white">
-                {{ trade.exit_price ? formatCurrency(trade.exit_price) : '-' }}
+                {{ trade.exit_price !== null && trade.exit_price !== undefined ? formatTradeCurrency(trade.exit_price, trade) : '-' }}
               </div>
             </div>
             <div>
@@ -358,7 +359,7 @@
               <div v-if="!isTradeOpen(trade)" class="font-medium" :class="[
                 trade.pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
               ]">
-                {{ formatSignedCurrency(trade.pnl) }}
+                {{ formatTradeSignedCurrency(trade.pnl, trade) }}
                 <span v-if="trade.pnl_percent" class="text-xs ml-1">
                   ({{ trade.pnl_percent > 0 ? '+' : '' }}{{ formatNumber(trade.pnl_percent) }}%)
                 </span>
@@ -370,7 +371,7 @@
               <div v-if="!isTradeOpen(trade)" class="font-medium" :class="[
                 getTradeGrossPnl(trade) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
               ]">
-                {{ formatSignedCurrency(getTradeGrossPnl(trade)) }}
+                {{ formatTradeSignedCurrency(getTradeGrossPnl(trade), trade) }}
               </div>
               <div v-else class="font-medium text-gray-400 dark:text-gray-500">-</div>
             </div>
@@ -379,7 +380,7 @@
               <div class="font-medium" :class="[
                 trade.unrealizedPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
               ]">
-                {{ formatSignedCurrency(trade.unrealizedPnl) }}
+                {{ formatTradeSignedCurrency(trade.unrealizedPnl, trade) }}
                 <span v-if="trade.unrealizedPnlPercent !== null && trade.unrealizedPnlPercent !== undefined" class="text-xs ml-1">
                   ({{ trade.unrealizedPnlPercent > 0 ? '+' : '' }}{{ formatNumber(trade.unrealizedPnlPercent) }}%)
                 </span>
@@ -443,7 +444,7 @@
         </div>
 
         <!-- Desktop view (table) -->
-        <div class="hidden md:block shadow ring-1 ring-black ring-opacity-5 md:rounded-lg" :key="'desktop-' + tradesStore.trades.length">
+        <div class="hidden md:block shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
         <!-- Top scroll bar wrapper -->
         <div ref="topScroll" class="overflow-x-auto overflow-y-hidden bg-gray-100 dark:bg-gray-800" @scroll="syncBottomScroll" style="height: 17px;">
           <div :style="{width: tableScrollWidth, height: '1px'}"></div>
@@ -507,7 +508,7 @@
                     <!-- Instrument type badge -->
                     <span v-if="trade.instrument_type === 'option'"
                       class="px-1.5 py-0.5 text-xs font-semibold rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400 whitespace-nowrap flex-shrink-0"
-                      :title="`${trade.option_type?.toUpperCase()} - Strike: ${formatCurrency(trade.strike_price)} - Exp: ${trade.expiration_date}`">
+                      :title="`${trade.option_type?.toUpperCase()} - Strike: ${formatTradeCurrency(trade.strike_price, trade)} - Exp: ${trade.expiration_date}`">
                       OPT
                     </span>
                     <span v-else-if="trade.instrument_type === 'future'"
@@ -515,6 +516,7 @@
                       :title="`Futures contract`">
                       FUT
                     </span>
+                    <TradeMarketSessionBadge :trade="trade" />
                     <!-- Position group strategy badge -->
                     <span v-if="trade.group_detected_strategy"
                       class="px-1.5 py-0.5 text-xs font-semibold rounded-full bg-primary-100 text-primary-800 dark:bg-primary-900/20 dark:text-primary-400 whitespace-nowrap flex-shrink-0"
@@ -525,9 +527,9 @@
                     <span v-if="trade.has_news"
                       :class="getNewsBadgeClasses(trade.news_sentiment)"
                       class="px-1.5 py-0.5 text-xs font-semibold rounded-full flex items-center whitespace-nowrap flex-shrink-0"
-                      :title="`${trade.news_events?.length || 0} news article(s) - ${trade.news_sentiment || 'neutral'} sentiment`">
+                      :title="`${trade.news_event_count ?? trade.news_events?.length ?? 0} news article(s) - ${trade.news_sentiment || 'neutral'} sentiment`">
                       <MdiIcon :icon="newspaperIcon" :size="12" class="mr-0.5" />
-                      <span>{{ trade.news_events?.length || 0 }}</span>
+                      <span>{{ trade.news_event_count ?? trade.news_events?.length ?? 0 }}</span>
                     </span>
                   </div>
                 </td>
@@ -581,14 +583,14 @@
                 <td v-else-if="column.visible && column.key === 'entry'" 
                     :class="[getCellPadding, 'whitespace-nowrap text-sm text-gray-900 dark:text-white cursor-pointer']" 
                     @click="$router.push(`/trades/${trade.id}`)">
-                  {{ formatCurrency(trade.entry_price) }}
+                  {{ formatTradeCurrency(trade.entry_price, trade) }}
                 </td>
 
                 <!-- Exit Column -->
                 <td v-else-if="column.visible && column.key === 'exit'" 
                     :class="[getCellPadding, 'whitespace-nowrap text-sm text-gray-900 dark:text-white cursor-pointer']" 
                     @click="$router.push(`/trades/${trade.id}`)">
-                  {{ trade.exit_price ? formatCurrency(trade.exit_price) : '-' }}
+                  {{ trade.exit_price !== null && trade.exit_price !== undefined ? formatTradeCurrency(trade.exit_price, trade) : '-' }}
                 </td>
 
                 <!-- Net P&L Column -->
@@ -598,7 +600,7 @@
                   <div v-if="!isTradeOpen(trade)" class="text-sm font-medium" :class="[
                     trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                   ]">
-                    {{ formatSignedCurrency(trade.pnl) }}
+                    {{ formatTradeSignedCurrency(trade.pnl, trade) }}
                   </div>
                   <div v-if="!isTradeOpen(trade) && trade.pnl_percent" class="text-xs text-gray-500 dark:text-gray-400">
                     {{ trade.pnl_percent > 0 ? '+' : '' }}{{ formatNumber(trade.pnl_percent) }}%
@@ -613,7 +615,7 @@
                   <div v-if="!isTradeOpen(trade)" class="text-sm font-medium" :class="[
                     getTradeGrossPnl(trade) >= 0 ? 'text-green-600' : 'text-red-600'
                   ]">
-                    {{ formatSignedCurrency(getTradeGrossPnl(trade)) }}
+                    {{ formatTradeSignedCurrency(getTradeGrossPnl(trade), trade) }}
                   </div>
                   <div v-else class="text-sm text-gray-400 dark:text-gray-500">-</div>
                 </td>
@@ -626,7 +628,7 @@
                     <div class="text-sm font-medium" :class="[
                       trade.unrealizedPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
                     ]">
-                      {{ formatSignedCurrency(trade.unrealizedPnl) }}
+                      {{ formatTradeSignedCurrency(trade.unrealizedPnl, trade) }}
                     </div>
                     <div v-if="trade.unrealizedPnlPercent !== null && trade.unrealizedPnlPercent !== undefined" class="text-xs text-gray-500 dark:text-gray-400">
                       {{ trade.unrealizedPnlPercent > 0 ? '+' : '' }}{{ formatNumber(trade.unrealizedPnlPercent) }}%
@@ -683,11 +685,11 @@
                     @click="$router.push(`/trades/${trade.id}`)">
                   <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full"
                     :class="[
-                      trade.exit_price
+                      !isTradeOpen(trade)
                         ? 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
                         : 'bg-primary-100 text-primary-800 dark:bg-primary-900/20 dark:text-primary-400'
                     ]">
-                    {{ trade.exit_price ? 'Closed' : 'Open' }}
+                    {{ isTradeOpen(trade) ? 'Open' : 'Closed' }}
                   </span>
                 </td>
                 
@@ -713,13 +715,13 @@
                 <td v-else-if="column.visible && column.key === 'commission'" 
                     :class="[getCellPadding, 'whitespace-nowrap text-sm text-gray-900 dark:text-white cursor-pointer']" 
                     @click="$router.push(`/trades/${trade.id}`)">
-                  {{ trade.commission ? formatCurrency(trade.commission) : '-' }}
+                  {{ trade.commission ? formatTradeCurrency(trade.commission, trade) : '-' }}
                 </td>
                 
                 <td v-else-if="column.visible && column.key === 'fees'" 
                     :class="[getCellPadding, 'whitespace-nowrap text-sm text-gray-900 dark:text-white cursor-pointer']" 
                     @click="$router.push(`/trades/${trade.id}`)">
-                  {{ trade.fees ? formatCurrency(trade.fees) : '-' }}
+                  {{ trade.fees ? formatTradeCurrency(trade.fees, trade) : '-' }}
                 </td>
                 
                 <td v-else-if="column.visible && column.key === 'strategy'"
@@ -793,7 +795,7 @@
                     :class="[getCellPadding, 'whitespace-nowrap cursor-pointer']"
                     @click="$router.push(`/trades/${trade.id}`)">
                   <div class="text-sm text-gray-900 dark:text-white font-mono">
-                    {{ (trade.stop_loss || trade.stopLoss) ? formatCurrency(trade.stop_loss || trade.stopLoss) : '-' }}
+                    {{ (trade.stop_loss || trade.stopLoss) ? formatTradeCurrency(trade.stop_loss || trade.stopLoss, trade) : '-' }}
                   </div>
                 </td>
 
@@ -801,7 +803,7 @@
                     :class="[getCellPadding, 'whitespace-nowrap cursor-pointer']"
                     @click="$router.push(`/trades/${trade.id}`)">
                   <div class="text-sm text-gray-900 dark:text-white font-mono">
-                    {{ (trade.take_profit || trade.takeProfit) ? formatCurrency(trade.take_profit || trade.takeProfit) : '-' }}
+                    {{ (trade.take_profit || trade.takeProfit) ? formatTradeCurrency(trade.take_profit || trade.takeProfit, trade) : '-' }}
                   </div>
                 </td>
 
@@ -864,7 +866,7 @@
                 <td v-else-if="column.visible && column.key === 'strikePrice'"
                     :class="[getCellPadding, 'whitespace-nowrap text-sm text-gray-900 dark:text-white cursor-pointer']"
                     @click="$router.push(`/trades/${trade.id}`)">
-                  {{ trade.strike_price ? formatCurrency(trade.strike_price) : '-' }}
+                  {{ trade.strike_price ? formatTradeCurrency(trade.strike_price, trade) : '-' }}
                 </td>
 
                 <td v-else-if="column.visible && column.key === 'expirationDate'"
@@ -1078,20 +1080,23 @@
 </template>
 
 <script setup>
-import { onMounted, computed, watch, ref } from 'vue'
+import { onMounted, computed, watch, ref, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTradesStore } from '@/stores/trades'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
 import { useUserTimezone } from '@/composables/useUserTimezone'
 import { DocumentTextIcon, ChatBubbleLeftIcon, FunnelIcon, XMarkIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
-import TradeFilters from '@/components/trades/TradeFilters.vue'
+// TradeFilters only ever renders inside the filters modal (v-if="showFiltersModal"),
+// so lazy-load it to keep its ~50 KB out of the TradeListView entry chunk.
+const TradeFilters = defineAsyncComponent(() => import('@/components/trades/TradeFilters.vue'))
 import TradeCommentsDialog from '@/components/trades/TradeCommentsDialog.vue'
 import EnrichmentStatus from '@/components/trades/EnrichmentStatus.vue'
 import ColumnCustomizer from '@/components/trades/ColumnCustomizer.vue'
 import TagManagement from '@/components/trades/TagManagement.vue'
 import MdiIcon from '@/components/MdiIcon.vue'
 import StockLogo from '@/components/common/StockLogo.vue'
+import TradeMarketSessionBadge from '@/components/trades/TradeMarketSessionBadge.vue'
 import { mdiNewspaper } from '@mdi/js'
 import api from '@/services/api'
 import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
@@ -1105,6 +1110,18 @@ const { formatCurrency, currencySymbol, formatSignedCurrency } = useCurrencyForm
 const { formatTime: formatTimeTz, userTimezone } = useUserTimezone()
 const route = useRoute()
 const router = useRouter()
+
+function getTradeCurrency(trade) {
+  return (trade?.original_currency || trade?.originalCurrency || 'USD').toUpperCase()
+}
+
+function formatTradeCurrency(value, trade, options = {}) {
+  return formatCurrency(value, { ...options, currency: getTradeCurrency(trade) })
+}
+
+function formatTradeSignedCurrency(value, trade, options = {}) {
+  return formatSignedCurrency(value, { ...options, currency: getTradeCurrency(trade) })
+}
 
 function formatExcursionValue(trade, value) {
   const numeric = Number(value)
