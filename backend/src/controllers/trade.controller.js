@@ -6,6 +6,7 @@ const { uuidv4 } = require('../utils/uuid');
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const finnhub = require('../utils/finnhub');
+const schwabMarketData = require('../utils/schwabMarketData');
 const cache = require('../utils/cache');
 const AnalyticsCache = require('../services/analyticsCache');
 const { computeTradePnl } = require('../services/pnlEngine');
@@ -2882,12 +2883,11 @@ const tradeController = {
         console.log('[ALPACA] Alpaca not configured, skipping option quotes');
       }
 
-      // Fetch stock/futures quotes from Finnhub
+      // Marks for open UPL: price cache → Schwab (primary) → Finnhub/FMP fallback.
       let quotes = {};
       let pendingStockSymbols = new Set();
-      if (symbols.length > 0 && finnhub.isConfigured()) {
+      if (symbols.length > 0) {
         try {
-          // Try cached prices from price_monitoring first, fallback to Finnhub for uncached
           console.log('Checking price_monitoring cache for position quotes...');
           const cacheResult = await timeAsyncOperation('openPositions.priceMonitoringCacheLookup', () => db.query(
             `SELECT symbol, current_price, previous_price, price_change, percent_change,
@@ -2899,27 +2899,46 @@ const tradeController = {
           ));
 
           for (const row of cacheResult.rows) {
+            const price = parseFloat(row.current_price);
+            if (!Number.isFinite(price) || price <= 0) continue;
             quotes[row.symbol] = {
-              c: parseFloat(row.current_price),
+              c: price,
               pc: parseFloat(row.previous_price) || 0,
               d: parseFloat(row.price_change) || 0,
               dp: parseFloat(row.percent_change) || 0,
               h: row.high_of_day ? parseFloat(row.high_of_day) : null,
               l: row.low_of_day ? parseFloat(row.low_of_day) : null,
-              o: row.open_price ? parseFloat(row.open_price) : null
+              o: row.open_price ? parseFloat(row.open_price) : null,
+              source: 'cache'
             };
           }
 
-          const cachedCount = Object.keys(quotes).length;
-          const uncachedSymbols = symbols.filter(s => !quotes[s]);
-          console.log(`Price cache: ${cachedCount} cached, ${uncachedSymbols.length} uncached`);
+          let missing = symbols.filter((s) => !quotes[s]?.c);
+          console.log(`Price cache: ${symbols.length - missing.length} cached, ${missing.length} missing`);
 
-          // Fallback to Finnhub for any uncached symbols
-          if (uncachedSymbols.length > 0) {
-            console.log('Fetching uncached symbols from Finnhub:', uncachedSymbols);
+          if (missing.length > 0) {
+            try {
+              console.log('[SCHWAB-MARKET] Fetching open-position quotes:', missing);
+              const schwabQuotes = await timeAsyncOperation('openPositions.schwabQuoteFetch', () =>
+                schwabMarketData.getQuotes(missing, { userId: req.user.id })
+              );
+              for (const [symbol, quote] of Object.entries(schwabQuotes || {})) {
+                if (quote?.c != null && Number(quote.c) > 0) {
+                  quotes[symbol] = quote;
+                }
+              }
+              missing = symbols.filter((s) => !quotes[s]?.c);
+              console.log(`[SCHWAB-MARKET] Filled ${symbols.length - missing.length} symbols; ${missing.length} still missing`);
+            } catch (schwabError) {
+              console.warn('[SCHWAB-MARKET] Open-position quotes failed:', schwabError.message);
+            }
+          }
+
+          if (missing.length > 0 && finnhub.isConfigured()) {
+            console.log('Fetching remaining symbols from Finnhub/FMP:', missing);
             try {
               const freshQuotes = await timeAsyncOperation('openPositions.finnhubQuoteFetch', () => withTimeout(
-                finnhub.getBatchQuotes(uncachedSymbols, {
+                finnhub.getBatchQuotes(missing, {
                   source: 'open_positions',
                   priority: 0,
                   userId: req.user.id,
@@ -2937,18 +2956,19 @@ const tradeController = {
               }
             } catch (quoteError) {
               if (quoteError.code === 'ETIMEOUT') {
-                pendingStockSymbols = new Set(uncachedSymbols);
+                pendingStockSymbols = new Set(missing);
               } else {
                 console.error('Failed to get stock quotes:', quoteError.message);
               }
             }
+          } else if (missing.length > 0) {
+            console.log('Finnhub/FMP not configured; leaving', missing.length, 'symbols without fallback quotes');
           }
-          console.log('Received quotes:', quotes);
+
+          console.log('Received quotes for', Object.keys(quotes).length, 'symbols');
         } catch (quoteError) {
           console.error('Failed to get stock quotes:', quoteError.message);
         }
-      } else if (symbols.length > 0) {
-        console.log('Finnhub not configured, skipping stock quotes');
       }
 
       // Enhance positions with real-time data
@@ -3951,7 +3971,9 @@ const tradeController = {
       }
 
       // Get chart data using the ChartService (for both stocks and options)
-      // For options, this fetches the underlying stock's candlestick data (e.g., SPY)
+      // For options, this fetches the underlying stock's candlestick data (e.g., SPY).
+      // For futures, ChartService remaps month contracts (MESU26) to continuous
+      // Schwab roots (/MES, /ES, …) while we keep trade.symbol for markers/labels.
       const chartData = await ChartService.getTradeChartData(userId, symbol, entryDate, exitDate, req.headers.host, { resolution });
       ChartService.alignCandlesToTradePrices(chartData, trade);
 
@@ -3959,6 +3981,7 @@ const tradeController = {
       chartData.trade = {
         id: trade.id,
         symbol: symbol,
+        chartSymbol: chartData.chartSymbol || symbol,
         entryDate: entryDate,
         exitDate: exitDate,
         // Include ALL time-related fields for debugging

@@ -19,7 +19,9 @@ const envSchema = Joi.object({
   EMAIL_PORT: Joi.number().integer().min(1).max(65535).optional(),
   EMAIL_USER: Joi.string().allow('', null),
   EMAIL_PASS: Joi.string().allow('', null),
-  EMAIL_FROM: Joi.string().email().allow('', null),
+  EMAIL_FROM: Joi.string().allow('', null),
+  EMAIL_PROVIDER: Joi.string().valid('smtp', 'resend', '').allow('', null),
+  RESEND_API_KEY: Joi.string().allow('', null),
   SUPPORT_EMAIL: Joi.string().email().allow('', null),
   ENABLE_PRICE_MONITORING: Joi.string().valid('true', 'false').default('true'),
   MARKET_DATA_PROVIDER: Joi.string().valid('finnhub', 'fmp').default('finnhub'),
@@ -55,9 +57,13 @@ function validateEnv() {
     warnings.push(`ENABLE_PRICE_MONITORING is enabled but ${marketDataKeyName} is not configured.`);
   }
 
-  const emailFieldsConfigured = [value.EMAIL_HOST, value.EMAIL_USER, value.EMAIL_PASS].filter(Boolean).length;
-  if (emailFieldsConfigured > 0 && emailFieldsConfigured < 3) {
-    warnings.push('Email configuration is partial. EMAIL_HOST, EMAIL_USER, and EMAIL_PASS must all be set.');
+  if (value.RESEND_API_KEY) {
+    // Resend HTTPS — preferred on Railway Hobby (SMTP blocked)
+  } else {
+    const emailFieldsConfigured = [value.EMAIL_HOST, value.EMAIL_USER, value.EMAIL_PASS].filter(Boolean).length;
+    if (emailFieldsConfigured > 0 && emailFieldsConfigured < 3) {
+      warnings.push('Email configuration is partial. EMAIL_HOST, EMAIL_USER, and EMAIL_PASS must all be set (or set RESEND_API_KEY).');
+    }
   }
 
   return {

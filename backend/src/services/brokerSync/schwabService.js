@@ -35,6 +35,38 @@ class SchwabService {
   }
 
   /**
+   * Last 4 digits from a full or redacted account number.
+   * @param {string|number} value
+   * @returns {string|null}
+   */
+  _accountLast4(value) {
+    if (value == null) return null;
+    const digits = String(value).replace(/\D/g, '');
+    if (!digits) return null;
+    return digits.slice(-4);
+  }
+
+  /**
+   * @param {object} connection - BrokerConnection (brokerMetadata optional)
+   * @returns {string[]} last-4 digit codes for excluded accounts
+   */
+  getExcludedSchwabAccountLast4s(connection) {
+    const raw = connection?.brokerMetadata?.excludedSchwabAccounts
+      || connection?.broker_metadata?.excludedSchwabAccounts
+      || [];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((v) => this._accountLast4(v))
+      .filter(Boolean);
+  }
+
+  isSchwabAccountExcluded(accountNumberOrRedacted, excludedLast4s) {
+    if (!excludedLast4s?.length) return false;
+    const last4 = this._accountLast4(accountNumberOrRedacted);
+    return Boolean(last4 && excludedLast4s.includes(last4));
+  }
+
+  /**
    * Extract date string (YYYY-MM-DD) from various date formats
    * Handles Date objects, ISO strings, date-only strings, and edge cases
    * @param {Date|string|any} dateValue - The date value to extract from
@@ -294,21 +326,96 @@ class SchwabService {
   /**
    * Get account information
    * @param {string} accessToken - Valid access token
+   * @param {{ fields?: string }} [options] - e.g. { fields: 'positions' }
    * @returns {Promise<object>}
    */
-  async getAccounts(accessToken) {
+  async getAccounts(accessToken, { fields } = {}) {
     console.log('[SCHWAB] Fetching accounts...');
+
+    const params = {};
+    if (fields) params.fields = fields;
 
     const response = await axios.get(
       `${SCHWAB_API_BASE}/accounts`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`
-        }
+        },
+        params
       }
     );
 
     return response.data;
+  }
+
+  /**
+   * Working / pending stop-like orders across non-excluded accounts.
+   * Schwab requires fromEnteredTime/toEnteredTime (max 60-day window).
+   *
+   * @param {string} accessToken
+   * @param {{ excludedLast4s?: string[] }} [options]
+   * @returns {Promise<Array<{ symbol: string, instruction: string, quantity: number, stopPrice: number, orderType: string, status: string, account: string }>>}
+   */
+  async getWorkingStopOrders(accessToken, { excludedLast4s = [] } = {}) {
+    const accounts = await this.getAccountNumbers(accessToken);
+    const now = new Date();
+    const from = new Date(now.getTime() - 59 * 24 * 60 * 60 * 1000);
+    const statuses = ['WORKING', 'PENDING_ACTIVATION', 'AWAITING_STOP_CONDITION', 'QUEUED', 'ACCEPTED'];
+    const stops = [];
+
+    for (const account of accounts || []) {
+      const last4 = this._accountLast4(account.accountNumber);
+      if (last4 && excludedLast4s.includes(last4)) continue;
+
+      for (const status of statuses) {
+        try {
+          const response = await axios.get(
+            `${SCHWAB_API_BASE}/accounts/${account.hashValue}/orders`,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              params: {
+                fromEnteredTime: from.toISOString(),
+                toEnteredTime: now.toISOString(),
+                status,
+                maxResults: 100
+              }
+            }
+          );
+
+          for (const order of response.data || []) {
+            const orderType = String(order.orderType || '');
+            const stopPrice = Number(order.stopPrice);
+            const isStopLike = /STOP|TRAIL/i.test(orderType) || Number.isFinite(stopPrice);
+            if (!isStopLike || !Number.isFinite(stopPrice)) continue;
+
+            const leg = (order.orderLegCollection || [])[0];
+            const symbol = String(leg?.instrument?.symbol || '').toUpperCase();
+            if (!symbol) continue;
+
+            stops.push({
+              symbol,
+              instruction: String(leg?.instruction || '').toUpperCase(),
+              quantity: Number(order.quantity) || Number(leg?.quantity) || 0,
+              stopPrice,
+              orderType,
+              status: String(order.status || status),
+              account: this.redactAccountNumber(account.accountNumber)
+            });
+          }
+        } catch (error) {
+          const code = error.response?.status;
+          // Empty status filters often 400; skip quietly.
+          if (code !== 400 && code !== 404) {
+            console.warn(
+              `[SCHWAB] Orders fetch failed for ****${last4} status=${status}:`,
+              error.response?.data || error.message
+            );
+          }
+        }
+      }
+    }
+
+    return stops;
   }
 
   /**
@@ -1110,17 +1217,35 @@ class SchwabService {
       await BrokerConnection.updateSyncLog(syncLogId, 'fetching');
     }
 
-    // Get ALL accounts - sync everything the user has access to
+    // Sync all Schwab accounts except those listed in brokerMetadata.excludedSchwabAccounts
+    const excludedLast4s = this.getExcludedSchwabAccountLast4s(connection);
+    if (excludedLast4s.length > 0) {
+      console.log(`[SCHWAB] Excluding accounts ending in: ${excludedLast4s.join(', ')}`);
+    }
+
     const accounts = await this.getAccountNumbers(accessToken);
     if (!accounts || accounts.length === 0) {
       throw new Error('No Schwab accounts found');
     }
 
-    console.log(`[SCHWAB] Found ${accounts.length} accounts to sync`);
+    const accountsToSync = accounts.filter((account) => {
+      const redacted = this.redactAccountNumber(account.accountNumber);
+      const excluded = this.isSchwabAccountExcluded(redacted, excludedLast4s);
+      if (excluded) {
+        console.log(`[SCHWAB] Skipping excluded account ${redacted}`);
+      }
+      return !excluded;
+    });
 
-    // Fetch transactions from ALL accounts, tagging each with the account identifier
+    if (accountsToSync.length === 0) {
+      throw new Error('No Schwab accounts left to sync after applying exclusions');
+    }
+
+    console.log(`[SCHWAB] Found ${accountsToSync.length}/${accounts.length} accounts to sync`);
+
+    // Fetch transactions from non-excluded accounts, tagging each with the account identifier
     let allTransactions = [];
-    for (const account of accounts) {
+    for (const account of accountsToSync) {
       const redactedAccount = this.redactAccountNumber(account.accountNumber);
       console.log(`[SCHWAB] Fetching transactions for account ${redactedAccount}...`);
       try {

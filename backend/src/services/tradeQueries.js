@@ -426,6 +426,20 @@ class TradeQueries {
         filters.accounts.forEach(a => values.push(a));
         paramCount += filters.accounts.length;
       }
+    } else {
+      // When no account filter is selected, honor Schwab excluded accounts
+      // (e.g. IRA ****7790) so Daily / analytics match the primary book only.
+      try {
+        const BrokerConnection = require('../models/BrokerConnection');
+        const excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId);
+        if (excluded.length > 0) {
+          whereClause += ` AND (t.account_identifier IS NULL OR t.account_identifier = '' OR t.account_identifier <> ALL($${paramCount}::text[]))`;
+          values.push(excluded);
+          paramCount++;
+        }
+      } catch (error) {
+        console.warn('[TRADE-QUERIES] Excluded account filter skipped:', error.message);
+      }
     }
 
     if (filters.qualityGrades && filters.qualityGrades.length > 0) {

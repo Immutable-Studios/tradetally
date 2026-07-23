@@ -10,6 +10,10 @@ const axios = require('axios');
 const db = require('../config/database');
 const encryptionService = require('../services/brokerSync/encryptionService');
 const cache = require('./cache');
+const {
+  extractUnderlyingFromFuturesSymbol,
+  getContinuousChartSymbolCandidates
+} = require('./futuresUtils');
 
 const SCHWAB_MARKET_DATA_BASE = 'https://api.schwabapi.com/marketdata/v1';
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000; // 5 minutes before expiration
@@ -21,24 +25,43 @@ class SchwabMarketData {
   }
 
   /**
-   * Get an active Schwab connection with valid tokens
-   * Tries to find any user with an active Schwab connection
+   * Get an active Schwab connection with valid tokens.
+   * Prefers the given user's connection when provided.
+   * @param {string|null} [userId]
    * @returns {Promise<object|null>} Connection with decrypted tokens or null
    */
-  async getActiveConnection() {
+  async getActiveConnection(userId = null) {
     try {
-      // Find any active Schwab connection
-      const query = `
+      const params = [];
+      let query = `
         SELECT id, user_id, schwab_access_token, schwab_refresh_token, schwab_token_expires_at
         FROM broker_connections
         WHERE broker_type = 'schwab'
           AND connection_status = 'active'
           AND schwab_access_token IS NOT NULL
+      `;
+      if (userId) {
+        params.push(userId);
+        query += ` AND user_id = $1`;
+      }
+      query += `
         ORDER BY last_sync_at DESC NULLS LAST
         LIMIT 1
       `;
 
-      const result = await db.query(query);
+      let result = await db.query(query, params);
+      // Fall back to any active Schwab connection if this user has none.
+      if (result.rows.length === 0 && userId) {
+        result = await db.query(`
+          SELECT id, user_id, schwab_access_token, schwab_refresh_token, schwab_token_expires_at
+          FROM broker_connections
+          WHERE broker_type = 'schwab'
+            AND connection_status = 'active'
+            AND schwab_access_token IS NOT NULL
+          ORDER BY last_sync_at DESC NULLS LAST
+          LIMIT 1
+        `);
+      }
       if (result.rows.length === 0) {
         return null;
       }
@@ -59,6 +82,50 @@ class SchwabMarketData {
       console.error('[SCHWAB-MARKET] Error getting active connection:', error.message);
       return null;
     }
+  }
+
+  /**
+   * Schwab quote symbols to try for a journal symbol.
+   * Equities: as-is. Futures month contracts: `/MESU26`, then continuous `/MES`.
+   */
+  quoteSymbolCandidates(symbol) {
+    if (!symbol) return [];
+    const raw = String(symbol).trim();
+    const upper = raw.toUpperCase();
+    const candidates = [];
+    const push = (value) => {
+      if (value && !candidates.includes(value)) candidates.push(value);
+    };
+
+    push(upper);
+    if (!upper.startsWith('/')) push(`/${upper}`);
+
+    const root = extractUnderlyingFromFuturesSymbol(upper.replace(/^\//, ''));
+    if (root) {
+      for (const candidate of getContinuousChartSymbolCandidates(upper.replace(/^\//, ''))) {
+        push(candidate);
+      }
+    }
+
+    return candidates;
+  }
+
+  mapSchwabQuote(quote) {
+    if (!quote || quote.lastPrice == null) return null;
+    return {
+      c: quote.lastPrice,
+      d: quote.netChange,
+      dp: quote.netPercentChangeInDouble,
+      h: quote.highPrice,
+      l: quote.lowPrice,
+      o: quote.openPrice,
+      pc: quote.closePrice,
+      t: Date.now() / 1000,
+      bid: quote.bidPrice,
+      ask: quote.askPrice,
+      volume: quote.totalVolume,
+      source: 'schwab'
+    };
   }
 
   /**
@@ -202,11 +269,13 @@ class SchwabMarketData {
       const result = {
         c: quote.lastPrice,           // Current price
         d: quote.netChange,           // Day change
-        dp: quote.netPercentChangeInDouble, // Day percent change
+        dp: quote.netPercentChangeInDouble ?? quote.netPercentChange, // Day %
         h: quote.highPrice,           // Day high
         l: quote.lowPrice,            // Day low (LOD)
         o: quote.openPrice,           // Open price
         pc: quote.closePrice,         // Previous close
+        high52: quote['52WeekHigh'] ?? quote.high52Week ?? null,
+        low52: quote['52WeekLow'] ?? quote.low52Week ?? null,
         t: Date.now() / 1000,         // Timestamp
         // Additional Schwab-specific fields
         bid: quote.bidPrice,
@@ -236,12 +305,12 @@ class SchwabMarketData {
    * @param {string[]} symbols - Array of symbols
    * @returns {Promise<object>} Map of symbol -> quote data
    */
-  async getQuotes(symbols) {
+  async getQuotes(symbols, { userId = null } = {}) {
     if (!symbols || symbols.length === 0) {
       return {};
     }
 
-    const connection = await this.getActiveConnection();
+    const connection = await this.getActiveConnection(userId);
     if (!connection) {
       return {};
     }
@@ -279,11 +348,13 @@ class SchwabMarketData {
           results[symbol] = {
             c: quote.lastPrice,
             d: quote.netChange,
-            dp: quote.netPercentChangeInDouble,
+            dp: quote.netPercentChangeInDouble ?? quote.netPercentChange,
             h: quote.highPrice,
             l: quote.lowPrice,
             o: quote.openPrice,
             pc: quote.closePrice,
+            high52: quote['52WeekHigh'] ?? quote.high52Week ?? null,
+            low52: quote['52WeekLow'] ?? quote.low52Week ?? null,
             t: Date.now() / 1000,
             source: 'schwab'
           };

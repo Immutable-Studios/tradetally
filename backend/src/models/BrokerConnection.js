@@ -268,6 +268,27 @@ class BrokerConnection {
   }
 
   /**
+   * Account identifiers the user has opted to ignore (e.g. Schwab IRA ****7790).
+   * Returns both bare last-4 and ****last4 forms for matching stored trades.
+   */
+  static async getExcludedAccountIdentifiers(userId) {
+    const schwabService = require('../services/brokerSync/schwabService');
+    const connections = await this.findByUserId(userId);
+    const identifiers = new Set();
+
+    for (const connection of connections) {
+      if (connection.brokerType !== 'schwab') continue;
+      const last4s = schwabService.getExcludedSchwabAccountLast4s(connection);
+      for (const last4 of last4s) {
+        identifiers.add(last4);
+        identifiers.add(`****${last4}`);
+      }
+    }
+
+    return [...identifiers];
+  }
+
+  /**
    * Find all IBKR connections for a user
    */
   static async findIBKRByUser(userId) {
@@ -607,6 +628,8 @@ class BrokerConnection {
     } else if (row.broker_type === 'schwab') {
       connection.schwabAccountId = row.schwab_account_id;
       connection.schwabTokenExpiresAt = row.schwab_token_expires_at;
+      // Needed for excludedSchwabAccounts (IRA / secondary accounts) during sync + daily filters.
+      connection.brokerMetadata = row.broker_metadata || {};
       // Only include decrypted tokens if explicitly requested
       if (includeCredentials) {
         if (row.schwab_access_token) {

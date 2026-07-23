@@ -63,10 +63,12 @@ const testimonialsRoutes = require('./routes/testimonials.routes');
 const supportRoutes = require('./routes/support.routes');
 const internalRoutes = require('./routes/internal.routes');
 const edgeReportRoutes = require('./routes/edgeReport.routes');
+const dailyReviewShareRoutes = require('./routes/dailyReviewShare.routes');
 const replayRoutes = require('./routes/replay.routes');
 const backtestRoutes = require('./routes/backtest.routes');
 const propFirmRoutes = require('./routes/propFirm.routes');
 const marketRiskRoutes = require('./routes/marketRisk.routes');
+const marketBreadthRoutes = require('./routes/marketBreadth.routes');
 const BillingService = require('./services/billingService');
 const priceMonitoringService = require('./services/priceMonitoringService');
 const backupScheduler = require('./services/backupScheduler.service');
@@ -87,6 +89,7 @@ const webMentionScheduler = require('./services/webMentionScheduler');
 const webhookEventBridge = require('./services/webhookEventBridge');
 const crmSyncScheduler = require('./services/crmSyncScheduler');
 const edgeReportScheduler = require('./services/edgeReportScheduler');
+const dailyReviewEmailScheduler = require('./services/schedulers/dailyReviewEmailScheduler');
 const activityTrackingService = require('./services/activityTrackingService');
 const engagementScheduler = require('./services/engagementScheduler');
 const activityTrackingMiddleware = require('./middleware/activityTracking');
@@ -313,10 +316,14 @@ app.use('/api/trial-feedback', trialFeedbackRoutes);
 app.use('/api/auth/passkey', passkeyRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/edge-reports', edgeReportRoutes);
+// Public, unauthenticated: token grants read-only access to one day's Daily
+// Review for the token's own owner only (see dailyShareAuth middleware).
+app.use('/api/public/daily-review', dailyReviewShareRoutes);
 app.use('/api/replay', replayRoutes);
 app.use('/api/backtest', backtestRoutes);
 app.use('/api/prop-firm', propFirmRoutes);
 app.use('/api/market-risk', marketRiskRoutes);
+app.use('/api/market-breadth', marketBreadthRoutes);
 
 // OAuth2 Provider endpoints
 app.use('/oauth', oauth2Routes);
@@ -741,6 +748,18 @@ function scheduleBackgroundServices(backgroundJobsDisabled) {
   }
 
   if (backgroundJobsDisabled) {
+    console.log('Daily review email scheduler disabled (DISABLE_BACKGROUND_JOBS=true)');
+  } else if (process.env.ENABLE_DAILY_REVIEW_EMAIL !== 'false') {
+    defer('daily-review-email-scheduler', () => {
+      console.log('Starting daily review email scheduler...');
+      dailyReviewEmailScheduler.start();
+      console.log('[SUCCESS] Daily review email scheduler started');
+    });
+  } else {
+    console.log('Daily review email scheduler disabled (ENABLE_DAILY_REVIEW_EMAIL=false)');
+  }
+
+  if (backgroundJobsDisabled) {
     console.log('CRM sync disabled (DISABLE_BACKGROUND_JOBS=true)');
   } else if (process.env.ENABLE_CRM_SYNC === 'true') {
     defer('crm-sync-scheduler', () => {
@@ -952,6 +971,7 @@ process.on('SIGTERM', async () => {
   portfolioSnapshotScheduler.stop();
   webMentionScheduler.stop();
   edgeReportScheduler.stop();
+  if (typeof dailyReviewEmailScheduler.stop === 'function') dailyReviewEmailScheduler.stop();
   if (typeof GamificationScheduler.stopScheduler === 'function') GamificationScheduler.stopScheduler();
   if (typeof TrialScheduler.stopScheduler === 'function') TrialScheduler.stopScheduler();
   if (RetentionEmailScheduler.stopScheduler) RetentionEmailScheduler.stopScheduler();
@@ -978,6 +998,7 @@ process.on('SIGINT', async () => {
   portfolioSnapshotScheduler.stop();
   webMentionScheduler.stop();
   edgeReportScheduler.stop();
+  if (typeof dailyReviewEmailScheduler.stop === 'function') dailyReviewEmailScheduler.stop();
   if (typeof GamificationScheduler.stopScheduler === 'function') GamificationScheduler.stopScheduler();
   if (typeof TrialScheduler.stopScheduler === 'function') TrialScheduler.stopScheduler();
   if (RetentionEmailScheduler.stopScheduler) RetentionEmailScheduler.stopScheduler();

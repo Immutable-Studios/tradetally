@@ -1136,6 +1136,19 @@ class Trade {
         values.push(filters.accounts);
         paramCount++;
       }
+    } else if (!filters.includeExcludedAccounts) {
+      try {
+        const BrokerConnection = require('./BrokerConnection');
+        const excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId);
+        if (excluded.length > 0) {
+          console.log('[OPEN_POSITIONS] Excluding accounts:', excluded);
+          whereClause += ` AND (t.account_identifier IS NULL OR t.account_identifier = '' OR t.account_identifier <> ALL($${paramCount}::text[]))`;
+          values.push(excluded);
+          paramCount++;
+        }
+      } catch (error) {
+        console.warn('[OPEN_POSITIONS] Excluded account filter skipped:', error.message);
+      }
     }
 
     let query = `

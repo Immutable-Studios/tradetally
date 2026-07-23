@@ -1,6 +1,9 @@
 <template>
   <div class="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-    <div class="flex items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-50 px-2 py-2 dark:border-gray-700 dark:bg-gray-800/80">
+    <div
+      v-if="!compact"
+      class="flex items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-50 px-2 py-2 dark:border-gray-700 dark:bg-gray-800/80"
+    >
       <div class="flex items-center gap-1" role="toolbar" aria-label="Chart drawing tools">
         <button
           v-for="tool in drawingTools"
@@ -58,9 +61,17 @@
       </button>
     </div>
 
-    <div ref="chartContainer" class="h-[480px] w-full bg-white dark:bg-gray-900"></div>
+    <div
+      ref="chartContainer"
+      class="w-full bg-white dark:bg-gray-900"
+      :class="height ? '' : 'h-[480px]'"
+      :style="height ? { height } : undefined"
+    ></div>
 
-    <div class="flex flex-wrap items-center gap-3 border-t border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+    <div
+      v-if="!compact"
+      class="flex flex-wrap items-center gap-3 border-t border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400"
+    >
       <div class="min-w-0 flex-1">
         <span v-if="hasPriceMismatch" class="font-medium text-amber-700 dark:text-amber-300">
           Recorded fill is outside the provider candle range. Marker is pinned to execution time.
@@ -135,6 +146,21 @@ const props = defineProps({
   resolutionLoading: {
     type: Boolean,
     default: false,
+  },
+  /** Hide drawing toolbar / footer for embedded daily review charts. */
+  compact: {
+    type: Boolean,
+    default: false,
+  },
+  /** Optional explicit chart height (e.g. "480px"). Falls back to h-[480px]. */
+  height: {
+    type: String,
+    default: '',
+  },
+  /** Synthetic flat bars after the last candle so trade markers sit off the right edge. */
+  rightPaddingBars: {
+    type: Number,
+    default: 0,
   },
 })
 
@@ -310,6 +336,8 @@ function chartStyles() {
       vertical: { color: dark ? '#273244' : '#e5e7eb' },
     },
     candle: {
+      // Hollow up / solid down — classic "hollow candle" default.
+      type: 'candle_up_stroke',
       bar: {
         upColor: '#059669',
         downColor: '#dc2626',
@@ -412,6 +440,60 @@ function intervalToPeriod(interval) {
     span: Number(match[1]),
     type: match[2] === 'hour' || match[2] === 'h' ? 'hour' : 'minute',
   }
+}
+
+function periodStepMs(period) {
+  if (!period) return 24 * 60 * 60 * 1000
+  if (period.type === 'day') return period.span * 24 * 60 * 60 * 1000
+  if (period.type === 'hour') return period.span * 60 * 60 * 1000
+  return period.span * 60 * 1000
+}
+
+function padBarsRight(bars, count, period) {
+  const padCount = Math.max(0, Number(count) || 0)
+  if (!bars.length || padCount === 0) return bars
+
+  const last = bars[bars.length - 1]
+  const step = periodStepMs(period)
+  const padded = bars.slice()
+  for (let i = 1; i <= padCount; i++) {
+    padded.push({
+      timestamp: last.timestamp + step * i,
+      open: last.close,
+      high: last.close,
+      low: last.close,
+      close: last.close,
+      volume: 0,
+      turnover: 0,
+    })
+  }
+  return padded
+}
+
+/**
+ * Chart APIs often return a long post-exit tail. Padding only helps if that
+ * tail is removed first — otherwise the synthetic bars sit off-screen past
+ * hours of after-trade candles.
+ */
+function trimBarsAfterTrade(bars, period) {
+  if (!bars.length) return bars
+
+  const events = executionEvents()
+  if (!events.length) return bars
+
+  const lastExecTs = Math.max(...events.map((event) => event.timestamp))
+  const step = periodStepMs(period)
+  // Keep a couple of real bars after the last fill for context, then pad.
+  const cutoff = lastExecTs + step * 2
+  const trimmed = bars.filter((bar) => bar.timestamp <= cutoff)
+  return trimmed.length ? trimmed : bars
+}
+
+function buildDisplayBars(period) {
+  const bars = normalizeChartData(props.chartData?.candles)
+  const rightPad = Math.max(0, Number(props.rightPaddingBars) || 0)
+  if (rightPad <= 0) return bars
+  return padBarsRight(trimBarsAfterTrade(bars, period), rightPad, period)
 }
 
 function pricePrecision() {
@@ -693,14 +775,33 @@ function resetView() {
 
 function focusTradeView() {
   if (!chart || normalizedBars.length === 0) return
-  const entryEvent = executionEvents().find((event) => event.kind === 'entry')
-  const focusBar = entryEvent ? closestBar(entryEvent.timestamp) : normalizedBars[0]
   const availableWidth = Math.max(320, chartContainer.value?.clientWidth || 800) - 90
+  const rightPad = Math.max(0, Number(props.rightPaddingBars) || 0)
+
+  if (rightPad > 0) {
+    // Data already ends with synthetic pad bars — pin the right edge so that
+    // empty space is visible and the trade sits left/center of the viewport.
+    const visibleBars = Math.max(24, rightPad + 16)
+    const barSpace = Math.max(8, Math.min(18, availableWidth / visibleBars))
+    chart.setBarSpace(barSpace)
+    chart.setMaxOffsetRightDistance(barSpace * rightPad)
+    chart.setOffsetRightDistance(barSpace * Math.min(4, rightPad))
+    chart.scrollToRealTime(0)
+    return
+  }
+
+  const events = executionEvents()
+  const entryEvent = events.find((event) => event.kind === 'entry')
+  const exitEvent = [...events].reverse().find((event) => event.kind === 'exit')
+  const focusTs = entryEvent && exitEvent
+    ? Math.round((entryEvent.timestamp + exitEvent.timestamp) / 2)
+    : entryEvent?.timestamp
+  const focusBar = focusTs != null ? closestBar(focusTs) : normalizedBars[0]
   const barSpace = Math.max(8, Math.min(20, availableWidth / 55))
 
   chart.setBarSpace(barSpace)
   chart.setOffsetRightDistance(availableWidth / 2)
-  chart.scrollToTimestamp(focusBar.timestamp, 200)
+  if (focusBar) chart.scrollToTimestamp(focusBar.timestamp, 200)
 }
 
 function applyTheme() {
@@ -731,11 +832,12 @@ async function createChart() {
 
   if (!chart) return
 
-  normalizedBars = normalizeChartData(props.chartData?.candles)
+  const period = intervalToPeriod(props.chartData?.interval)
+  normalizedBars = buildDisplayBars(period)
   const ticker = props.chartData?.trade?.symbol || props.chartData?.symbol || 'Trade'
 
   chart.setSymbol({ ticker, pricePrecision: pricePrecision(), volumePrecision: 0 })
-  chart.setPeriod(intervalToPeriod(props.chartData?.interval))
+  chart.setPeriod(period)
   chart.setDataLoader({
     getBars: ({ type, callback }) => {
       callback(type === 'init' ? normalizedBars : [], false)

@@ -93,8 +93,14 @@ api.interceptors.response.use(
       const currentPath = window.location.pathname
       const isAuthPage = currentPath.includes('/login') || currentPath.includes('/register') || currentPath.includes('/forgot-password') || currentPath.includes('/reset-password')
       const isLoginRequest = error.config?.url?.includes('/auth/login')
+      // Public no-login surfaces (daily email share links, public trade pages).
+      // Optional/auth-gated side requests (e.g. symbol logos) must not yank
+      // the visitor off the shared view into the sign-in screen.
+      const isPublicPage = currentPath.startsWith('/daily/share/')
+        || currentPath.startsWith('/public')
+        || currentPath.startsWith('/trades/public')
 
-      if (!isAuthPage && !isLoginRequest && !error.config?.skipAuthRedirect) {
+      if (!isAuthPage && !isLoginRequest && !isPublicPage && !error.config?.skipAuthRedirect) {
         // Clear the JS-readable csrf_token cookie so the synchronous "has session"
         // hint in the auth store doesn't bounce us back to /dashboard in a loop.
         document.cookie = 'csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'

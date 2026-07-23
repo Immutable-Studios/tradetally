@@ -420,6 +420,12 @@ const baseNavigation = [
         badge: { type: 'pro', text: 'Pro' }
       },
       {
+        name: 'Market Breadth',
+        to: '/market-breadth',
+        route: 'market-breadth',
+        description: 'Index, sector, and group ETF relative strength via Schwab'
+      },
+      {
         name: 'Web Mentions',
         to: '/web-mentions',
         route: 'web-mentions',
@@ -442,6 +448,7 @@ const baseNavigation = [
       }
     ]
   },
+  { name: 'Daily', to: '/daily', route: 'daily' },
   { name: 'Calendar', to: '/calendar', route: 'calendar' },
   { name: 'Import', to: '/import', route: 'import' }
 ]

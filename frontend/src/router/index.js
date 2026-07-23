@@ -171,6 +171,19 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/daily',
+      name: 'daily',
+      component: () => import('@/views/DailyView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      // No-login-required link emailed by the daily review job.
+      path: '/daily/share/:token',
+      name: 'daily-share',
+      component: () => import('@/views/DailySharedView.vue'),
+      meta: { public: true }
+    },
+    {
       path: '/calendar',
       name: 'calendar',
       component: () => import('@/views/CalendarView.vue'),
@@ -280,6 +293,12 @@ const router = createRouter({
       path: '/market-risk',
       name: 'market-risk',
       component: () => import('@/views/MarketRiskView.vue')
+    },
+    {
+      path: '/market-breadth',
+      name: 'market-breadth',
+      component: () => import('@/views/MarketBreadthView.vue'),
+      meta: { requiresAuth: true }
     },
     {
       path: '/u/:username',

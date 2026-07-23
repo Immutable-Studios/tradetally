@@ -463,7 +463,9 @@ function tradeExitEvents(trade, timezone) {
     .map((e) => ({ date: e.exit_date, pnl: parseNumericValue(e.realized_pnl) }));
 }
 
-function buildCalendarDayContributions(trades, dateStr, timezone) {
+function buildCalendarDayContributions(trades, dateStr, timezone, equityForPct = null) {
+  const AccountBalanceService = require('../services/accountBalanceService');
+
   return trades
     .map((trade) => {
       const exitEvents = tradeExitEvents(trade, timezone);
@@ -501,6 +503,13 @@ function buildCalendarDayContributions(trades, dateStr, timezone) {
         trade.underlying_asset
       );
 
+      const notional = AccountBalanceService.tradeNotional(trade);
+      const { equity_used_pct, equity_pnl_pct } = AccountBalanceService.equityPercents(
+        notional,
+        pnl,
+        equityForPct
+      );
+
       return {
         trade_id: trade.trade_id,
         symbol: trade.symbol,
@@ -511,7 +520,15 @@ function buildCalendarDayContributions(trades, dateStr, timezone) {
           : null,
         risk_amount: riskAmount != null ? Math.round(riskAmount * 100) / 100 : null,
         exit_count: exitCount,
-        is_partial: exitCount < totalExitCount
+        is_partial: exitCount < totalExitCount,
+        notional,
+        equity_used_pct,
+        equity_pnl_pct,
+        entry_price: trade.entry_price != null ? parseNumericValue(trade.entry_price) : null,
+        quantity: trade.quantity != null ? parseNumericValue(trade.quantity) : null,
+        instrument_type: trade.instrument_type || 'stock',
+        point_value: trade.point_value != null ? parseNumericValue(trade.point_value) : null,
+        underlying_asset: trade.underlying_asset || null
       };
     })
     .filter(Boolean)
@@ -1998,8 +2015,40 @@ const analyticsController = {
         ORDER BY t.id
       `;
       const tradeResult = await db.query(dayQuery, params);
-      const contributions = buildCalendarDayContributions(tradeResult.rows, dateStr, userTz);
-      res.json({ date: dateStr, contributions });
+
+      const AccountBalanceService = require('../services/accountBalanceService');
+      let accountStrip = null;
+      let equityForPct = null;
+      try {
+        // Prefer live Schwab for "today"; otherwise fall back to equity_snapshots.
+        const today = new Date().toISOString().slice(0, 10);
+        const resolved = await AccountBalanceService.resolveEquityForDay(
+          req.user.id,
+          dateStr,
+          { preferLive: dateStr === today }
+        );
+        accountStrip = resolved.strip;
+        equityForPct = resolved.equity;
+        if (!accountStrip && dateStr === today) {
+          accountStrip = await AccountBalanceService.captureAccountSnapshotForDay(req.user.id, dateStr);
+          equityForPct = accountStrip?.equityForPct ?? equityForPct;
+        }
+      } catch (error) {
+        console.warn('[CALENDAR-DAY] Account equity resolve failed:', error.message);
+      }
+
+      const contributions = buildCalendarDayContributions(
+        tradeResult.rows,
+        dateStr,
+        userTz,
+        equityForPct
+      );
+      res.json({
+        date: dateStr,
+        contributions,
+        accountStrip,
+        equityForPct
+      });
     } catch (error) {
       console.error('Calendar day detail error:', error);
       next(error);

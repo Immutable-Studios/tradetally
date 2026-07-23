@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const axios = require('axios');
 const crypto = require('crypto');
 const unsubscribeService = require('./unsubscribeService');
 const escapeHtml = require('../utils/escapeHtml');
@@ -7,7 +8,46 @@ const db = require('../config/database');
 const maskEmail = require('../utils/maskEmail');
 
 function getEmailProvider() {
+  // Prefer Resend when an API key is present — Railway Hobby/Trial block
+  // outbound SMTP, so HTTPS providers are the reliable default there.
+  if (process.env.RESEND_API_KEY) return 'resend';
   return (process.env.EMAIL_PROVIDER || 'smtp').trim().toLowerCase();
+}
+
+/**
+ * Normalize From into { name, address }. Handles bare emails and
+ * "Name <email@domain>" strings (including when wrongly stuffed into .address).
+ */
+function parseEmailAddress(value, fallbackName = 'TradeTally') {
+  if (!value) {
+    return { name: fallbackName, address: 'onboarding@resend.dev' };
+  }
+  if (typeof value === 'object') {
+    const nested = parseEmailAddress(value.address || value.email || '', value.name || fallbackName);
+    return {
+      name: (value.name && !String(value.name).includes('<') ? value.name : nested.name) || fallbackName,
+      address: nested.address
+    };
+  }
+
+  const str = String(value).trim();
+  const match = str.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (match) {
+    const name = match[1].trim().replace(/^["']|["']$/g, '') || fallbackName;
+    return { name, address: match[2].trim() };
+  }
+  return { name: fallbackName, address: str };
+}
+
+function formatFromAddress(from) {
+  const { name, address } = parseEmailAddress(from || process.env.EMAIL_FROM);
+  return `${name} <${address}>`;
+}
+
+function normalizeAddressList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return [value].filter(Boolean);
 }
 
 class EmailService {
@@ -47,19 +87,82 @@ class EmailService {
   }
 
   static isConfigured() {
+    if (getEmailProvider() === 'resend') {
+      return !!process.env.RESEND_API_KEY;
+    }
     return !!(process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS);
   }
 
+  /**
+   * Provider-agnostic send. Uses Resend HTTPS API when RESEND_API_KEY is set
+   * (required on Railway Hobby — outbound SMTP is blocked), otherwise SMTP.
+   */
+  static async sendMail(mailOptions) {
+    if (!this.isConfigured()) {
+      throw new Error('Email is not configured');
+    }
+
+    if (getEmailProvider() === 'resend') {
+      return this.sendViaResend(mailOptions);
+    }
+
+    const transporter = this.createTransporter();
+    return transporter.sendMail(mailOptions);
+  }
+
+  static async sendViaResend(mailOptions) {
+    const payload = {
+      from: formatFromAddress(mailOptions.from),
+      to: normalizeAddressList(mailOptions.to),
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      text: mailOptions.text
+    };
+
+    const replyTo = normalizeAddressList(mailOptions.replyTo || mailOptions.reply_to);
+    if (replyTo.length) payload.reply_to = replyTo.length === 1 ? replyTo[0] : replyTo;
+
+    const cc = normalizeAddressList(mailOptions.cc);
+    if (cc.length) payload.cc = cc;
+
+    const bcc = normalizeAddressList(mailOptions.bcc);
+    if (bcc.length) payload.bcc = bcc;
+
+    if (mailOptions.headers && typeof mailOptions.headers === 'object') {
+      payload.headers = mailOptions.headers;
+    }
+
+    try {
+      const response = await axios.post('https://api.resend.com/emails', payload, {
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+      return { messageId: response.data?.id, provider: 'resend', ...response.data };
+    } catch (error) {
+      const detail = error.response?.data?.message
+        || error.response?.data?.error
+        || error.message;
+      const wrapped = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      wrapped.cause = error;
+      throw wrapped;
+    }
+  }
+
   static getTransactionalFromAddress() {
-    return process.env.EMAIL_FROM_TRANSACTIONAL ||
+    const raw = process.env.EMAIL_FROM_TRANSACTIONAL ||
       process.env.EMAIL_FROM ||
-      'noreply@tradetally.io';
+      'onboarding@resend.dev';
+    return parseEmailAddress(raw).address;
   }
 
   static getMarketingFromAddress() {
-    return process.env.EMAIL_FROM_MARKETING ||
+    const raw = process.env.EMAIL_FROM_MARKETING ||
       process.env.EMAIL_FROM ||
       this.getTransactionalFromAddress();
+    return parseEmailAddress(raw).address;
   }
 
   static getBaseTemplate(title, content) {
@@ -305,8 +408,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Verification email sent to:', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'email-verification', emailType: 'verification', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent' });
     } catch (error) {
@@ -358,8 +460,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Password reset email sent to:', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'password-reset', emailType: 'password_reset', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent' });
     } catch (error) {
@@ -412,8 +513,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Account lockout email sent to:', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'account_lockout', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent' });
     } catch (error) {
@@ -465,8 +565,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Email change verification email sent to:', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'email-change-verification', emailType: 'email_change', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent' });
     } catch (error) {
@@ -540,8 +639,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log(`Trial ${isExpired ? 'expiration' : 'reminder'} email sent successfully to ${maskEmail(email)}`);
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'trial-expiration', emailType: 'trial_expiration', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: { daysRemaining, isExpired } });
     } catch (error) {
@@ -615,13 +713,88 @@ class EmailService {
       }
     };
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Weekly digest sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'weekly-digest', emailType: 'weekly_digest', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: { tradeCount, totalPnL } });
     } catch (error) {
       console.error('Error sending weekly digest to', maskEmail(email), error);
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'weekly-digest', emailType: 'weekly_digest', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'failed', errorMessage: error.message, userId });
+      throw error;
+    }
+  }
+
+  /**
+   * Send the daily "Daily Review" email: a link to that day's review page
+   * (no login required - the link carries an opaque share token) plus a
+   * quick P&L/trade-count summary.
+   * @param {object} user - User row (id, email, username, full_name)
+   * @param {object} options - { dateLabel, shareUrl, tradeCount, dayPnL }
+   */
+  static async sendDailyReviewEmail(user, { dateLabel, shareUrl, tradeCount = 0, dayPnL = null }) {
+    if (!this.isConfigured()) {
+      console.log('Email not configured, skipping daily review email');
+      return;
+    }
+
+    const email = user.email;
+    const userId = user.id;
+    const safeDateLabel = escapeHtml(dateLabel);
+    const hasPnl = dayPnL !== null && dayPnL !== undefined;
+    const pnlFormatted = hasPnl ? `${Number(dayPnL) < 0 ? '-' : ''}$${Math.abs(Number(dayPnL)).toFixed(2)}` : null;
+    const pnlColor = hasPnl && Number(dayPnL) >= 0 ? '#16a34a' : '#dc2626';
+
+    const content = `
+      <h1 style="color: #18181b; font-size: 22px; margin: 0 0 8px 0; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        Your daily review is ready
+      </h1>
+      <p style="color: #71717a; font-size: 15px; line-height: 1.6; margin: 0 0 24px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        Here's what happened on ${safeDateLabel}.
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 16px 20px; background-color: #fafafa; border-radius: 8px 0 0 8px; border-right: 1px solid #f4f4f5; width: 50%; text-align: center;">
+            <p style="color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 6px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Trades</p>
+            <p style="color: #18181b; font-size: 26px; font-weight: 700; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">${tradeCount}</p>
+          </td>
+          <td style="padding: 16px 20px; background-color: #fafafa; border-radius: 0 8px 8px 0; width: 50%; text-align: center;">
+            <p style="color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 6px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Day P&amp;L</p>
+            <p style="color: ${pnlColor}; font-size: 26px; font-weight: 700; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">${hasPnl ? pnlFormatted : '—'}</p>
+          </td>
+        </tr>
+      </table>
+
+      <div style="text-align: center; margin: 0 0 8px 0;">
+        <a href="${shareUrl}" style="${this.getButtonStyle()}">View Daily Review</a>
+      </div>
+
+      <p style="color: #a1a1aa; font-size: 13px; line-height: 1.5; margin: 24px 0 0 0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        This link works without logging in. You can turn off this email anytime from Settings.
+      </p>
+    `;
+
+    const html = this.getBaseTemplate(`Daily Review - ${dateLabel}`, content);
+    const textSummary = `Your daily review for ${dateLabel} is ready. ${tradeCount} trade${tradeCount === 1 ? '' : 's'}${hasPnl ? `, day P&L ${pnlFormatted}` : ''}. View it here (no login required): ${shareUrl}`;
+
+    const mailOptions = {
+      from: { name: 'TradeTally', address: this.getTransactionalFromAddress() },
+      to: email,
+      subject: `Daily review - ${dateLabel}`,
+      html,
+      text: textSummary,
+      headers: {
+        'X-Entity-Ref-ID': `daily-review-${Date.now()}`,
+        'Message-ID': `<daily-review-${Date.now()}@tradetally.io>`
+      }
+    };
+
+    try {
+      await this.sendMail(mailOptions);
+      console.log('Daily review email sent to', maskEmail(email));
+      await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL } });
+    } catch (error) {
+      console.error('Error sending daily review email to', maskEmail(email), error);
+      await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'failed', errorMessage: error.message, userId, metadata: { dateLabel } });
       throw error;
     }
   }
@@ -730,8 +903,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Edge report email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'edge_report', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { period_start: report.period_start, period_end: report.period_end, total_pnl: totalPnL } });
     } catch (error) {
@@ -790,8 +962,7 @@ class EmailService {
       }
     };
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Re-engagement email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'reengagement', emailType: 'reengagement', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: { daysInactive } });
     } catch (error) {
@@ -938,8 +1109,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Trial conversion email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'trial-conversion', emailType: 'trial_conversion', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: metrics });
     } catch (error) {
@@ -1038,8 +1208,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('At-risk follow-up email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'at-risk-followup', emailType: 'at_risk_followup', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: metrics });
     } catch (error) {
@@ -1114,8 +1283,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('Churned no-import follow-up email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'churned-no-imports-followup', emailType: 'churned_no_imports_followup', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId, metadata: context });
     } catch (error) {
@@ -1210,8 +1378,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('[SUCCESS] Review request email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'review-request', emailType: 'review_request', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', userId });
     } catch (error) {
@@ -1299,8 +1466,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('[SUCCESS] Subscription welcome email sent to', maskEmail(email));
       await this.logEmail({ recipient: email, subject: mailOptions.subject || 'subscription-welcome', emailType: 'subscription_welcome', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', metadata: { planName } });
     } catch (error) {
@@ -1345,8 +1511,7 @@ class EmailService {
     };
 
     try {
-      const transporter = this.createTransporter();
-      await transporter.sendMail(mailOptions);
+      await this.sendMail(mailOptions);
       console.log('[SUCCESS] Support request email sent from', maskEmail(userEmail));
       await this.logEmail({ recipient: to, subject: mailOptions.subject || 'support-request', emailType: 'support_request', htmlBody: mailOptions.html || null, textBody: mailOptions.text, status: 'sent', metadata: { userEmail, tier } });
     } catch (error) {
