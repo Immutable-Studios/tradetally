@@ -1180,3 +1180,48 @@ describe('Schwab dedupe key construction (exit orderId|datetime)', () => {
     expect(schwabService.isDuplicateTrade(fullClose, [partial])).toBe(false);
   });
 });
+
+describe('Schwab broker-position availability guard', () => {
+  const db = require('../../src/config/database');
+  const Trade = require('../../src/models/Trade');
+
+  beforeEach(() => {
+    db.query.mockReset();
+    Trade.delete = jest.fn();
+  });
+
+  // Schwab intermittently ignores `fields=positions` and returns balances-only
+  // accounts. That must NOT read as "account is flat", or the reconcile deletes
+  // every open position in the journal.
+  it('reports positions unavailable when no account carries a positions field', () => {
+    const balancesOnly = [
+      { securitiesAccount: { accountNumber: '12345119', currentBalances: {} } },
+      { securitiesAccount: { accountNumber: '12347790', currentBalances: {} } }
+    ];
+    expect(schwabService.brokerPositionsAvailable(balancesOnly)).toBe(false);
+    expect(schwabService.brokerPositionsAvailable([])).toBe(false);
+    expect(schwabService.brokerPositionsAvailable(null)).toBe(false);
+  });
+
+  it('reports positions available when the field is present, even if empty (genuinely flat)', () => {
+    const flatButReported = [
+      { securitiesAccount: { accountNumber: '12345119', positions: [] } }
+    ];
+    expect(schwabService.brokerPositionsAvailable(flatButReported)).toBe(true);
+  });
+
+  it('refuses to delete persisted opens when the position map is empty', async () => {
+    const summary = await schwabService.reconcilePersistedOpenEquity(
+      'user-1',
+      'conn-1',
+      new Map(),
+      ['****5119']
+    );
+
+    expect(summary.deleted).toHaveLength(0);
+    expect(summary.resized).toHaveLength(0);
+    // Bails out before even reading the journal, so nothing can be trimmed.
+    expect(db.query).not.toHaveBeenCalled();
+    expect(Trade.delete).not.toHaveBeenCalled();
+  });
+});

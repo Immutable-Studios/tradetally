@@ -438,6 +438,23 @@ class SchwabService {
    * @param {Array} accountsPayload - Schwab accounts response
    * @returns {Map<string, {symbol:string, accountIdentifier:string, quantity:number, side:string, averagePrice:number|null}>}
    */
+  /**
+   * True only when the accounts payload actually carries position data.
+   *
+   * Schwab sometimes ignores `fields=positions` and returns balances-only
+   * accounts. Without this check an omitted-positions response is
+   * indistinguishable from a flat account, and every reconcile below would
+   * "correct" the journal by closing real positions.
+   *
+   * @param {Array} accountsPayload
+   * @returns {boolean}
+   */
+  brokerPositionsAvailable(accountsPayload) {
+    return (accountsPayload || []).some(account =>
+      Object.prototype.hasOwnProperty.call(account?.securitiesAccount || {}, 'positions')
+    );
+  }
+
   buildBrokerEquityPositionMap(accountsPayload, excludedLast4s = []) {
     const map = new Map();
     for (const account of accountsPayload || []) {
@@ -608,6 +625,15 @@ class SchwabService {
     const positionMap = brokerPositions || new Map();
     const syncedAccounts = new Set(syncedAccountIdentifiers || []);
     const summary = { deleted: [], resized: [], keptLots: 0, skippedAccounts: new Set() };
+
+    // Independent safety net (the caller also checks brokerPositionsAvailable):
+    // an empty map would mark every persisted open as phantom and delete the
+    // whole book. A truly flat account is far rarer than a bad/partial API
+    // response, so refuse rather than risk destroying real positions.
+    if (positionMap.size === 0) {
+      console.warn('[SCHWAB] Skipping persisted open reconcile: broker position map is empty (refusing to delete every open lot)');
+      return summary;
+    }
 
     const { rows } = await db.query(
       `SELECT id, symbol, side, quantity, entry_time, account_identifier
@@ -1743,6 +1769,15 @@ class SchwabService {
     let brokerPositions = null;
     try {
       const accountsWithPositions = await this.getAccounts(accessToken, { fields: 'positions' });
+
+      // Schwab intermittently ignores `fields=positions` and returns accounts with
+      // no positions key at all. An empty position map then looks identical to a
+      // genuinely flat book -- and acting on that deletes every open position.
+      // Require at least one account to actually carry the field before trusting it.
+      if (!this.brokerPositionsAvailable(accountsWithPositions)) {
+        throw new Error('accounts response contained no positions field (Schwab omitted it) - cannot distinguish flat from unavailable');
+      }
+
       brokerPositions = this.buildBrokerEquityPositionMap(accountsWithPositions, excludedLast4s);
       console.log(`[SCHWAB] Live equity positions: ${brokerPositions.size}`);
       const beforeOpen = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
