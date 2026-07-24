@@ -1181,7 +1181,7 @@ describe('Schwab dedupe key construction (exit orderId|datetime)', () => {
   });
 });
 
-describe('Schwab broker-position availability guard', () => {
+describe('Schwab broker-position trust assessment', () => {
   const db = require('../../src/config/database');
   const Trade = require('../../src/models/Trade');
 
@@ -1190,38 +1190,68 @@ describe('Schwab broker-position availability guard', () => {
     Trade.delete = jest.fn();
   });
 
-  // Schwab intermittently ignores `fields=positions` and returns balances-only
-  // accounts. That must NOT read as "account is flat", or the reconcile deletes
-  // every open position in the journal.
-  it('reports positions unavailable when no account carries a positions field', () => {
-    const balancesOnly = [
-      { securitiesAccount: { accountNumber: '12345119', currentBalances: {} } },
-      { securitiesAccount: { accountNumber: '12347790', currentBalances: {} } }
-    ];
-    expect(schwabService.brokerPositionsAvailable(balancesOnly)).toBe(false);
-    expect(schwabService.brokerPositionsAvailable([])).toBe(false);
-    expect(schwabService.brokerPositionsAvailable(null)).toBe(false);
+  const account = (last4, extra) => ({
+    securitiesAccount: Object.assign({ accountNumber: `1234${last4}` }, extra)
   });
 
-  it('reports positions available when the field is present, even if empty (genuinely flat)', () => {
-    const flatButReported = [
-      { securitiesAccount: { accountNumber: '12345119', positions: [] } }
+  // Schwab omits `positions` for an account holding nothing. That is a real
+  // empty book, so reconciling must be allowed or phantoms never get cleared.
+  it('treats omitted positions + zero market value as flat and usable', () => {
+    const payload = [
+      account('5119', { currentBalances: { longMarketValue: 0, shortMarketValue: 0, equity: 1028759.92 } })
     ];
-    expect(schwabService.brokerPositionsAvailable(flatButReported)).toBe(true);
+    const result = schwabService.assessBrokerPositions(payload, []);
+    expect(result.usable).toBe(true);
+    expect(result.flat).toBe(true);
   });
 
-  it('refuses to delete persisted opens when the position map is empty', async () => {
+  // But omitting positions while still holding value means data was withheld;
+  // acting on that empty map would delete every real open position.
+  it('refuses a payload that omits positions while holding market value', () => {
+    const payload = [
+      account('5119', { currentBalances: { longMarketValue: 38385, shortMarketValue: 0 } })
+    ];
+    const result = schwabService.assessBrokerPositions(payload, []);
+    expect(result.usable).toBe(false);
+    expect(result.reason).toMatch(/non-zero market value/);
+  });
+
+  it('is usable when positions are present', () => {
+    const payload = [
+      account('5119', { positions: [{ instrument: { symbol: 'COPX', assetType: 'COLLECTIVE_INVESTMENT' }, longQuantity: 500 }] })
+    ];
+    const result = schwabService.assessBrokerPositions(payload, []);
+    expect(result.usable).toBe(true);
+    expect(result.flat).toBe(false);
+  });
+
+  // An excluded account's payload shape must not veto reconciling synced ones.
+  it('ignores excluded accounts when assessing trust', () => {
+    const payload = [
+      account('7790', { currentBalances: { longMarketValue: 99999, shortMarketValue: 0 } }),
+      account('5119', { positions: [] })
+    ];
+    expect(schwabService.assessBrokerPositions(payload, ['7790']).usable).toBe(true);
+    expect(schwabService.assessBrokerPositions(payload, []).usable).toBe(false);
+  });
+
+  it('refuses to delete persisted opens on an empty map unless flatness is confirmed', async () => {
     const summary = await schwabService.reconcilePersistedOpenEquity(
-      'user-1',
-      'conn-1',
-      new Map(),
-      ['****5119']
+      'user-1', 'conn-1', new Map(), ['****5119']
     );
-
     expect(summary.deleted).toHaveLength(0);
-    expect(summary.resized).toHaveLength(0);
-    // Bails out before even reading the journal, so nothing can be trimmed.
     expect(db.query).not.toHaveBeenCalled();
     expect(Trade.delete).not.toHaveBeenCalled();
+  });
+
+  it('does clear persisted opens on an empty map when flatness is confirmed', async () => {
+    db.query.mockResolvedValueOnce({ rows: [
+      { id: 't1', symbol: 'COPX', side: 'long', quantity: '500', entry_time: '2026-07-21T13:30:00Z', account_identifier: '****5119' }
+    ] });
+    const summary = await schwabService.reconcilePersistedOpenEquity(
+      'user-1', 'conn-1', new Map(), ['****5119'], { allowEmpty: true }
+    );
+    expect(summary.deleted).toHaveLength(1);
+    expect(Trade.delete).toHaveBeenCalledWith('t1', 'user-1');
   });
 });

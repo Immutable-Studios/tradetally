@@ -439,20 +439,64 @@ class SchwabService {
    * @returns {Map<string, {symbol:string, accountIdentifier:string, quantity:number, side:string, averagePrice:number|null}>}
    */
   /**
-   * True only when the accounts payload actually carries position data.
+   * Decide whether an accounts payload is a trustworthy picture of open positions.
    *
-   * Schwab sometimes ignores `fields=positions` and returns balances-only
-   * accounts. Without this check an omitted-positions response is
-   * indistinguishable from a flat account, and every reconcile below would
-   * "correct" the journal by closing real positions.
+   * Schwab OMITS `positions` entirely when an account holds nothing, so a missing
+   * field usually means "flat", not "data unavailable" -- treating it as
+   * unavailable would stop us ever clearing phantoms from a flattened account.
+   * The discriminator is market value: an account that omits positions while
+   * reporting non-zero long/short market value is withholding data, and
+   * reconciling against that would delete real positions.
+   *
+   * Excluded accounts are ignored -- we never reconcile them, so their payload
+   * shape must not veto reconciling the accounts we do sync.
    *
    * @param {Array} accountsPayload
-   * @returns {boolean}
+   * @param {string[]} excludedLast4s
+   * @returns {{usable: boolean, flat: boolean, reason: string}}
    */
-  brokerPositionsAvailable(accountsPayload) {
-    return (accountsPayload || []).some(account =>
-      Object.prototype.hasOwnProperty.call(account?.securitiesAccount || {}, 'positions')
-    );
+  assessBrokerPositions(accountsPayload, excludedLast4s = []) {
+    const accounts = (accountsPayload || []).filter(account => {
+      const redacted = this.redactAccountNumber(account?.securitiesAccount?.accountNumber);
+      return !this.isSchwabAccountExcluded(redacted, excludedLast4s);
+    });
+
+    if (accounts.length === 0) {
+      return { usable: false, flat: false, reason: 'no syncable accounts in positions payload' };
+    }
+
+    let anyPositionsField = false;
+    const withheld = [];
+
+    for (const account of accounts) {
+      const securitiesAccount = account.securitiesAccount || {};
+      if (Object.prototype.hasOwnProperty.call(securitiesAccount, 'positions')) {
+        anyPositionsField = true;
+        continue;
+      }
+      const balances = securitiesAccount.currentBalances || {};
+      const longMarketValue = Number(balances.longMarketValue) || 0;
+      const shortMarketValue = Number(balances.shortMarketValue) || 0;
+      if (longMarketValue !== 0 || shortMarketValue !== 0) {
+        withheld.push(this.redactAccountNumber(securitiesAccount.accountNumber));
+      }
+    }
+
+    if (withheld.length > 0) {
+      return {
+        usable: false,
+        flat: false,
+        reason: `account(s) ${withheld.join(', ')} omitted positions while holding non-zero market value`
+      };
+    }
+
+    return {
+      usable: true,
+      flat: !anyPositionsField,
+      reason: anyPositionsField
+        ? 'positions present'
+        : 'all syncable accounts flat (zero long/short market value)'
+    };
   }
 
   buildBrokerEquityPositionMap(accountsPayload, excludedLast4s = []) {
@@ -621,7 +665,7 @@ class SchwabService {
    * @param {string[]} syncedAccountIdentifiers - redacted ids actually synced
    * @param {{ dryRun?: boolean }} [options]
    */
-  async reconcilePersistedOpenEquity(userId, connectionId, brokerPositions, syncedAccountIdentifiers, { dryRun = false } = {}) {
+  async reconcilePersistedOpenEquity(userId, connectionId, brokerPositions, syncedAccountIdentifiers, { dryRun = false, allowEmpty = false } = {}) {
     const positionMap = brokerPositions || new Map();
     const syncedAccounts = new Set(syncedAccountIdentifiers || []);
     const summary = { deleted: [], resized: [], keptLots: 0, skippedAccounts: new Set() };
@@ -630,8 +674,8 @@ class SchwabService {
     // an empty map would mark every persisted open as phantom and delete the
     // whole book. A truly flat account is far rarer than a bad/partial API
     // response, so refuse rather than risk destroying real positions.
-    if (positionMap.size === 0) {
-      console.warn('[SCHWAB] Skipping persisted open reconcile: broker position map is empty (refusing to delete every open lot)');
+    if (positionMap.size === 0 && !allowEmpty) {
+      console.warn('[SCHWAB] Skipping persisted open reconcile: empty position map not confirmed flat (refusing to delete every open lot)');
       return summary;
     }
 
@@ -1767,19 +1811,22 @@ class SchwabService {
     // alone misses journals / corp-actions, which leaves false opens (and can
     // omit real holds that never appear as unmatched openings).
     let brokerPositions = null;
+    let brokerPositionsFlat = false;
     try {
       const accountsWithPositions = await this.getAccounts(accessToken, { fields: 'positions' });
 
-      // Schwab intermittently ignores `fields=positions` and returns accounts with
-      // no positions key at all. An empty position map then looks identical to a
-      // genuinely flat book -- and acting on that deletes every open position.
-      // Require at least one account to actually carry the field before trusting it.
-      if (!this.brokerPositionsAvailable(accountsWithPositions)) {
-        throw new Error('accounts response contained no positions field (Schwab omitted it) - cannot distinguish flat from unavailable');
+      // Only reconcile against a payload we can trust: Schwab omits `positions`
+      // for a flat account (fine, that IS an empty book) but also sometimes
+      // withholds it while the account still holds value (not fine -- acting on
+      // that empty map would delete every real open position).
+      const assessment = this.assessBrokerPositions(accountsWithPositions, excludedLast4s);
+      if (!assessment.usable) {
+        throw new Error(`untrustworthy positions payload: ${assessment.reason}`);
       }
+      brokerPositionsFlat = assessment.flat;
 
       brokerPositions = this.buildBrokerEquityPositionMap(accountsWithPositions, excludedLast4s);
-      console.log(`[SCHWAB] Live equity positions: ${brokerPositions.size}`);
+      console.log(`[SCHWAB] Live equity positions: ${brokerPositions.size} (${assessment.reason})`);
       const beforeOpen = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
       trades = this.reconcileOpenTradesWithBrokerPositions(trades, brokerPositions);
       const afterOpen = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
@@ -1848,7 +1895,8 @@ class SchwabService {
           connection.userId,
           connection.id,
           brokerPositions,
-          syncedAccountIdentifiers
+          syncedAccountIdentifiers,
+          { allowEmpty: brokerPositionsFlat }
         );
         if (repair.deleted.length || repair.resized.length) {
           console.log(
