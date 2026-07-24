@@ -279,12 +279,6 @@ const router = createRouter({
       component: () => import('@/views/OAuth/AuthorizeView.vue')
     },
     {
-      path: '/billing',
-      name: 'billing',
-      component: () => import('@/views/BillingView.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/public',
       name: 'public-trades',
       component: () => import('@/views/PublicTradesView.vue')
@@ -398,16 +392,6 @@ const router = createRouter({
       name: 'notifications',
       component: () => import('@/views/NotificationsView.vue'),
       meta: { requiresAuth: true, requiresTier: 'pro' }
-    },
-    {
-      path: '/leaderboard',
-      name: 'leaderboard',
-      component: () => import('@/views/GamificationView.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/gamification',
-      redirect: '/leaderboard'
     },
     // Backwards-compatible redirects for renamed routes
     {

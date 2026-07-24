@@ -427,6 +427,7 @@ import {
   PresentationChartLineIcon,
   BeakerIcon,
   CalendarIcon,
+  CalendarDaysIcon,
   ArrowUpTrayIcon,
   ShieldCheckIcon,
   ChevronRightIcon,
@@ -523,6 +524,7 @@ const navItems = computed(() => {
         { name: 'Prop Firm', to: '/analysis/prop-firm', route: 'prop-firm' }
       ]
     },
+    { name: 'Daily', icon: CalendarDaysIcon, to: '/daily', route: 'daily' },
     { name: 'Calendar', icon: CalendarIcon, to: '/calendar', route: 'calendar' },
     {
       name: 'Import',
