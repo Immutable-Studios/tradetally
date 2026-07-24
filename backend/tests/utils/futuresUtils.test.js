@@ -1,7 +1,10 @@
 const {
   resolveFuturesRoot,
   isKnownFuturesRoot,
-  getFuturesPointValue
+  getFuturesPointValue,
+  getFuturesContractExpiryDate,
+  isFuturesContractExpired,
+  getContinuousChartSymbolCandidates
 } = require('../../src/utils/futuresUtils');
 
 describe('resolveFuturesRoot', () => {
@@ -39,5 +42,42 @@ describe('getFuturesPointValue', () => {
     expect(getFuturesPointValue('MNQ')).toBe(2);
     expect(getFuturesPointValue('ES')).toBe(50);
     expect(getFuturesPointValue('UNKNOWN')).toBe(50);
+  });
+});
+
+describe('getContinuousChartSymbolCandidates', () => {
+  it('maps micro contracts to /MES then /ES style continuous roots', () => {
+    expect(getContinuousChartSymbolCandidates('MESU26')).toEqual([
+      '/MES', '/ES', '!MES', '!ES', 'MES', 'ES'
+    ]);
+    expect(getContinuousChartSymbolCandidates('MNQU26')).toEqual([
+      '/MNQ', '/NQ', '!MNQ', '!NQ', 'MNQ', 'NQ'
+    ]);
+  });
+
+  it('maps full-size contracts without micro aliases', () => {
+    expect(getContinuousChartSymbolCandidates('ESU26')).toEqual([
+      '/ES', '!ES', 'ES'
+    ]);
+  });
+
+  it('returns empty for equities', () => {
+    expect(getContinuousChartSymbolCandidates('AAPL')).toEqual([]);
+  });
+});
+
+describe('futures contract expiry', () => {
+  it('uses the 3rd Friday of the contract month', () => {
+    // March 2026: 1st is Sunday → 3rd Friday is March 20
+    expect(getFuturesContractExpiryDate('MNQH26').toISOString().slice(0, 10)).toBe('2026-03-20');
+    // June 2026: 1st is Monday → 3rd Friday is June 19
+    expect(getFuturesContractExpiryDate('MNQM26').toISOString().slice(0, 10)).toBe('2026-06-19');
+  });
+
+  it('marks rolled months as expired and front months as live', () => {
+    const asOf = new Date('2026-07-20T12:00:00Z');
+    expect(isFuturesContractExpired('MNQH26', asOf)).toBe(true);
+    expect(isFuturesContractExpired('MNQM26', asOf)).toBe(true);
+    expect(isFuturesContractExpired('MNQU26', asOf)).toBe(false);
   });
 });

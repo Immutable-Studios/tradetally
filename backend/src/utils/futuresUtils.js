@@ -70,6 +70,53 @@ function resolveFuturesRoot(input) {
 }
 
 /**
+ * Micro roots → full-size continuous roots (same index price levels).
+ * Used when Schwab/TOS continuous history is requested as /ES or /NQ.
+ */
+const MICRO_TO_FULL_ROOT = {
+  MES: 'ES',
+  MNQ: 'NQ',
+  MYM: 'YM',
+  M2K: 'RTY',
+  MCL: 'CL',
+  MNG: 'NG',
+  MGC: 'GC',
+  SIL: 'SI'
+};
+
+/**
+ * Ordered Schwab/TOS-style continuous symbols to try for chart candles.
+ * Contract months like MESU26 often have no pricehistory; continuous
+ * `/MES`, `/ES`, `!MES`, `!ES` do.
+ * @returns {string[]} empty when symbol is not a futures contract/root
+ */
+function getContinuousChartSymbolCandidates(symbol) {
+  const root = resolveFuturesRoot(symbol) || extractUnderlyingFromFuturesSymbol(symbol);
+  if (!root) return [];
+
+  const roots = [root];
+  const full = MICRO_TO_FULL_ROOT[root];
+  if (full) roots.push(full);
+
+  const candidates = [];
+  const push = (value) => {
+    if (value && !candidates.includes(value)) candidates.push(value);
+  };
+
+  for (const r of roots) {
+    push(`/${r}`);
+  }
+  for (const r of roots) {
+    push(`!${r}`);
+  }
+  for (const r of roots) {
+    push(r);
+  }
+
+  return candidates;
+}
+
+/**
  * Get minimum tick size for futures contracts based on underlying asset.
  * Returns the price increment of one tick (in points), or null if unknown.
  * Returning null (rather than a guessed default) is deliberate: tick sizes vary
@@ -125,18 +172,67 @@ function getFuturesTickSize(underlying) {
  * @param {string} symbol - The futures contract symbol
  * @returns {string|null} The underlying asset symbol or null if not a futures format
  */
+const FUTURES_MONTH_CODES = {
+  F: '01', G: '02', H: '03', J: '04', K: '05', M: '06',
+  N: '07', Q: '08', U: '09', V: '10', X: '11', Z: '12'
+};
+
+/**
+ * Strip Schwab/TOS exchange suffixes and leading slash: `/MESU26:XCME` → `MESU26`.
+ */
+function normalizeFuturesContractSymbol(symbol) {
+  if (!symbol) return null;
+  let normalizedSymbol = symbol.toString().toUpperCase().trim().replace(/\s+/g, '');
+  if (normalizedSymbol.startsWith('/')) {
+    normalizedSymbol = normalizedSymbol.slice(1);
+  }
+  const colonIdx = normalizedSymbol.indexOf(':');
+  if (colonIdx > 0) {
+    normalizedSymbol = normalizedSymbol.slice(0, colonIdx);
+  }
+  return normalizedSymbol || null;
+}
+
+function resolveFuturesYear(yearToken) {
+  let year = parseInt(yearToken, 10);
+  if (!Number.isFinite(year)) return null;
+  if (year < 10) {
+    year += Math.floor(new Date().getFullYear() / 10) * 10;
+  } else if (year < 100) {
+    year += 2000;
+  }
+  return year;
+}
+
+/**
+ * Parse root / month / year from a futures contract symbol.
+ * @returns {{ underlyingAsset: string, contractMonth: string, contractYear: number }|null}
+ */
+function parseFuturesContractFields(symbol) {
+  const normalizedSymbol = normalizeFuturesContractSymbol(symbol);
+  if (!normalizedSymbol) return null;
+
+  // Standard: MESU26, NQU24, ESM4, M2KM6
+  const futuresMatch = normalizedSymbol.match(/^([A-Z][A-Z0-9]{0,3})([FGHJKMNQUVXZ])(\d{1,2})$/);
+  if (!futuresMatch) return null;
+
+  const underlyingAsset = futuresMatch[1];
+  const contractMonth = FUTURES_MONTH_CODES[futuresMatch[2]] || null;
+  const contractYear = resolveFuturesYear(futuresMatch[3]);
+  if (!contractMonth || !contractYear) return null;
+
+  return { underlyingAsset, contractMonth, contractYear };
+}
+
 function extractUnderlyingFromFuturesSymbol(symbol) {
   if (!symbol) return null;
 
-  const normalizedSymbol = symbol.toString().toUpperCase().trim();
-
-  // Standard futures format: BASE + MONTH_CODE + YEAR (e.g., ESM4, NQU24, MESZ5, CLZ23, M2KM6)
-  // Base may contain digits (e.g. M2K = Micro Russell 2000), so allow alphanumerics after a leading letter.
-  // Month codes: F,G,H,J,K,M,N,Q,U,V,X,Z
-  const futuresMatch = normalizedSymbol.match(/^([A-Z][A-Z0-9]{0,3})([FGHJKMNQUVXZ])(\d{1,2})$/);
-  if (futuresMatch) {
-    return futuresMatch[1]; // Return the base symbol (underlying asset)
+  const parsed = parseFuturesContractFields(symbol);
+  if (parsed) {
+    return parsed.underlyingAsset;
   }
+
+  let normalizedSymbol = normalizeFuturesContractSymbol(symbol) || '';
 
   // TradingView format: NYMEX_MINI:QG1!
   const tvMatch = normalizedSymbol.match(/^([A-Z_]+):([A-Z]+)(\d+)/);
@@ -151,11 +247,46 @@ function extractUnderlyingFromFuturesSymbol(symbol) {
   return null;
 }
 
+/**
+ * Approximate CME equity-index quarterly expiry: 3rd Friday of the contract month (UTC).
+ * Good enough to detect rolled/expired contracts that cannot still be open.
+ */
+function getFuturesContractExpiryDate(symbolOrFields) {
+  const fields = typeof symbolOrFields === 'string'
+    ? parseFuturesContractFields(symbolOrFields)
+    : symbolOrFields;
+  if (!fields?.contractMonth || !fields?.contractYear) return null;
+
+  const year = Number(fields.contractYear);
+  const monthIndex = Number(fields.contractMonth) - 1; // 0-based
+  if (!Number.isFinite(year) || monthIndex < 0 || monthIndex > 11) return null;
+
+  const first = new Date(Date.UTC(year, monthIndex, 1));
+  const dayOfWeek = first.getUTCDay(); // 0=Sun … 5=Fri
+  const firstFriday = 1 + ((5 - dayOfWeek + 7) % 7);
+  const thirdFriday = firstFriday + 14;
+  return new Date(Date.UTC(year, monthIndex, thirdFriday, 23, 59, 59, 999));
+}
+
+/**
+ * True when the contract is past its approximate expiry (cannot be a live open).
+ */
+function isFuturesContractExpired(symbol, asOf = new Date()) {
+  const expiry = getFuturesContractExpiryDate(symbol);
+  if (!expiry) return false;
+  return asOf.getTime() > expiry.getTime();
+}
+
 module.exports = {
   getFuturesPointValue,
   getFuturesTickSize,
   extractUnderlyingFromFuturesSymbol,
+  parseFuturesContractFields,
+  normalizeFuturesContractSymbol,
+  getFuturesContractExpiryDate,
+  isFuturesContractExpired,
   isKnownFuturesRoot,
-  resolveFuturesRoot
+  resolveFuturesRoot,
+  getContinuousChartSymbolCandidates
 };
 

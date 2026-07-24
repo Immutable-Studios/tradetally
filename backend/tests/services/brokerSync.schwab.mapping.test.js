@@ -157,6 +157,7 @@ describe('Schwab parseTransactionDetails (single transaction mapping)', () => {
       symbol: 'AAPL',
       side: 'long',
       quantity: 10,
+      signedQuantity: 10,
       price: 100.25,
       time: '2026-03-06T14:30:05Z',
       matchingSymbol: 'AAPL',
@@ -169,10 +170,88 @@ describe('Schwab parseTransactionDetails (single transaction mapping)', () => {
       strikePrice: null,
       expirationDate: null,
       underlyingSymbol: null,
+      pointValue: null,
+      contractMonth: null,
+      contractYear: null,
+      underlyingAsset: null,
       cusip: '037833100',
       orderId: '1006200000001',
       accountIdentifier: '****1234'
     });
+  });
+
+  test('fill-net reconcile drops futures opens when stream is flat', () => {
+    const fills = [
+      {
+        accountIdentifier: '****5119',
+        matchingSymbol: 'MNQU26',
+        symbol: 'MNQU26',
+        instrumentType: 'future',
+        signedQuantity: 3
+      },
+      {
+        accountIdentifier: '****5119',
+        matchingSymbol: 'MNQU26',
+        symbol: 'MNQU26',
+        instrumentType: 'future',
+        signedQuantity: -3
+      }
+    ];
+    const trades = [
+      {
+        symbol: 'MNQU26',
+        matchingSymbol: 'MNQU26',
+        accountIdentifier: '****5119',
+        instrumentType: 'future',
+        side: 'long',
+        quantity: 3,
+        entryPrice: 28995.75,
+        exitPrice: null,
+        entryTime: '2026-07-20T14:26:05+0000',
+        exitTime: null
+      },
+      {
+        symbol: 'MNQU26',
+        matchingSymbol: 'MNQU26',
+        accountIdentifier: '****5119',
+        instrumentType: 'future',
+        side: 'long',
+        quantity: 3,
+        entryPrice: 28900,
+        exitPrice: 28950,
+        entryTime: '2026-07-20T13:00:00+0000',
+        exitTime: '2026-07-20T14:00:00+0000'
+      }
+    ];
+
+    const reconciled = schwabService.reconcileOpenFuturesWithFillNet(trades, fills);
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0].exitPrice).toBe(28950);
+  });
+
+  test('fill-net map only includes futures symbols from the fill stream', () => {
+    const map = schwabService.buildFillNetPositionMap([
+      {
+        accountIdentifier: '****5119',
+        matchingSymbol: 'MNQU26',
+        instrumentType: 'future',
+        signedQuantity: 3
+      },
+      {
+        accountIdentifier: '****5119',
+        matchingSymbol: 'MNQU26',
+        instrumentType: 'future',
+        signedQuantity: -3
+      },
+      {
+        accountIdentifier: '****5119',
+        matchingSymbol: 'AAPL',
+        instrumentType: 'stock',
+        signedQuantity: 10
+      }
+    ]);
+    expect(map.get('****5119|MNQU26')).toBe(0);
+    expect(map.has('****5119|AAPL')).toBe(false);
   });
 
   test('maps a short-sale entry (OPENING, negative amount) to side short with absolute quantity', () => {
@@ -317,6 +396,115 @@ describe('Schwab parseTransactionDetails (single transaction mapping)', () => {
     const parsed = schwabService.parseTransactionDetails(tx);
     expect(parsed.time).toBe('2026-03-06T14:45:30+0000');
   });
+
+  test('picks FUTURE leg even when CURRENCY cash legs come first without feeType', () => {
+    // Mirrors live Schwab TOS futures payloads: several CURRENCY rows precede the contract.
+    const parsed = schwabService.parseTransactionDetails({
+      type: 'TRADE',
+      orderId: 9001,
+      time: '2026-07-20T14:30:00+0000',
+      tradeDate: '2026-07-20T04:00:00+0000',
+      netAmount: -75177.72,
+      _accountIdentifier: '****5119',
+      transferItems: [
+        {
+          instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' },
+          feeType: 'COMMISSION',
+          amount: 4.5,
+          cost: -4.5
+        },
+        {
+          instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' },
+          amount: 0,
+          cost: 0
+        },
+        {
+          instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' },
+          feeType: 'FUTURES_EXCHANGE_FEE',
+          amount: 0.7,
+          cost: -0.7
+        },
+        {
+          instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' },
+          amount: 0.02,
+          cost: -0.02
+        },
+        {
+          instrument: {
+            assetType: 'FUTURE',
+            symbol: '/MESU26:XCME',
+            description: 'Micro E-mini S&P 500 Stock Price Index Futures, Sep-26'
+          },
+          amount: 2,
+          price: 7517.25,
+          cost: -75172.5,
+          positionEffect: 'OPENING'
+        }
+      ]
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed.instrumentType).toBe('future');
+    expect(parsed.symbol).toBe('MESU26');
+    expect(parsed.matchingSymbol).toBe('MESU26');
+    expect(parsed.underlyingSymbol).toBe('MES');
+    expect(parsed.underlyingAsset).toBe('MES');
+    expect(parsed.contractMonth).toBe('09');
+    expect(parsed.contractYear).toBe(2026);
+    expect(parsed.pointValue).toBe(5);
+    expect(parsed.quantity).toBe(2);
+    expect(parsed.price).toBe(7517.25);
+    expect(parsed.side).toBe('long');
+    expect(parsed.commission).toBe(4.5);
+    expect(parsed.fees).toBe(0.7);
+  });
+});
+
+describe('Schwab futures matching', () => {
+  test('matches MES open/close with futures point-value P&L', () => {
+    const openTx = {
+      type: 'TRADE',
+      orderId: 9001,
+      time: '2026-07-20T14:30:00+0000',
+      netAmount: -37586,
+      _accountIdentifier: '****5119',
+      transferItems: [
+        { instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' }, amount: 0, cost: 0 },
+        {
+          instrument: { assetType: 'FUTURE', symbol: '/MESU26:XCME' },
+          amount: 1,
+          price: 7500,
+          positionEffect: 'OPENING'
+        }
+      ]
+    };
+    const closeTx = {
+      type: 'TRADE',
+      orderId: 9002,
+      time: '2026-07-20T15:00:00+0000',
+      netAmount: 37550,
+      _accountIdentifier: '****5119',
+      transferItems: [
+        { instrument: { assetType: 'CURRENCY', symbol: 'CURRENCY_USD' }, amount: 0, cost: 0 },
+        {
+          instrument: { assetType: 'FUTURE', symbol: '/MESU26:XCME' },
+          amount: -1,
+          price: 7510,
+          positionEffect: 'CLOSING'
+        }
+      ]
+    };
+
+    const trades = schwabService.parseTransactions([openTx, closeTx]);
+    const futures = trades.filter(t => t.instrumentType === 'future');
+    expect(futures).toHaveLength(1);
+    expect(futures[0].symbol).toBe('MESU26');
+    expect(futures[0].quantity).toBe(1);
+    expect(futures[0].entryPrice).toBe(7500);
+    expect(futures[0].exitPrice).toBe(7510);
+    // MES point value $5: (7510-7500) * 1 * 5 = 50
+    expect(futures[0].pnl).toBe(50);
+  });
 });
 
 describe('Schwab parseTransactions (full payload -> trades)', () => {
@@ -441,6 +629,154 @@ describe('Schwab parseTransactions (full payload -> trades)', () => {
     // Remaining IRA sell must NOT close the taxable account's open lot.
     expect(iraOpen).toHaveLength(0);
     expect(iraClosed.every(t => t.accountIdentifier === '****7790')).toBe(true);
+  });
+
+  test('same-day open remainder is not merged into the closed group', () => {
+    // Regression: group key used exit-date for closes and entry-date for opens.
+    // On a same-day partial exit those dates match, so leftover qty was absorbed
+    // into a "closed" trade with entry qty > exit qty.
+    const trades = schwabService.parseTransactions([
+      schwabEquityTx({
+        orderId: 1007175248272,
+        time: '2026-07-14T18:26:34Z',
+        symbol: 'ETHU',
+        price: 15.8761,
+        amount: 100,
+        positionEffect: 'OPENING',
+        accountIdentifier: '****5119'
+      }),
+      schwabEquityTx({
+        orderId: 1007191418168,
+        time: '2026-07-14T20:00:00Z',
+        symbol: 'ETHU',
+        price: 16.465,
+        amount: -72,
+        positionEffect: 'CLOSING',
+        accountIdentifier: '****5119'
+      })
+    ]);
+
+    const closed = trades.filter(t => t.exitPrice != null);
+    const open = trades.filter(t => t.exitPrice == null);
+
+    expect(closed).toHaveLength(1);
+    expect(closed[0].quantity).toBe(72);
+    expect(closed[0].entryPrice).toBeCloseTo(15.8761, 4);
+    expect(closed[0].exitPrice).toBeCloseTo(16.465, 4);
+
+    expect(open).toHaveLength(1);
+    expect(open[0].quantity).toBe(28);
+    expect(open[0].exitPrice).toBeNull();
+    expect(open[0].exitTime).toBeNull();
+  });
+
+  test('buildBrokerEquityPositionMap includes ETF COLLECTIVE_INVESTMENT holdings', () => {
+    const map = schwabService.buildBrokerEquityPositionMap([
+      {
+        securitiesAccount: {
+          accountNumber: '88197790',
+          positions: [
+            {
+              instrument: { symbol: 'TQQQ', assetType: 'COLLECTIVE_INVESTMENT', type: 'EXCHANGE_TRADED_FUND' },
+              longQuantity: 900,
+              shortQuantity: 0,
+              averagePrice: 65.98
+            },
+            {
+              instrument: { symbol: 'SPY   260618C00500000', assetType: 'OPTION' },
+              longQuantity: 1,
+              shortQuantity: 0
+            }
+          ]
+        }
+      }
+    ]);
+
+    expect([...map.keys()]).toEqual(['****7790|TQQQ']);
+    expect(map.get('****7790|TQQQ')).toMatchObject({ quantity: 900, side: 'long' });
+  });
+
+  test('reconcileOpenTradesWithBrokerPositions drops phantom equity opens when broker is flat', () => {
+    const trades = [
+      {
+        symbol: 'ETHU',
+        side: 'long',
+        quantity: 28,
+        entryPrice: 15.8761,
+        exitPrice: null,
+        entryTime: '2026-07-14T18:26:34Z',
+        exitTime: null,
+        tradeDate: '2026-07-14',
+        instrumentType: 'stock',
+        accountIdentifier: '****5119',
+        executionData: [{ type: 'entry', quantity: 28, price: 15.8761, datetime: '2026-07-14T18:26:34Z' }]
+      },
+      {
+        symbol: 'BROS',
+        side: 'long',
+        quantity: 250,
+        entryPrice: 68.65,
+        exitPrice: null,
+        entryTime: '2026-07-17T14:00:00Z',
+        exitTime: null,
+        tradeDate: '2026-07-17',
+        instrumentType: 'stock',
+        accountIdentifier: '****5119',
+        executionData: [{ type: 'entry', quantity: 250, price: 68.65, datetime: '2026-07-17T14:00:00Z' }]
+      }
+    ];
+
+    const brokerPositions = new Map([
+      ['****5119|BROS', { symbol: 'BROS', accountIdentifier: '****5119', quantity: 250, side: 'long', averagePrice: 68.65 }]
+    ]);
+
+    const reconciled = schwabService.reconcileOpenTradesWithBrokerPositions(trades, brokerPositions);
+    expect(reconciled.find(t => t.symbol === 'ETHU')).toBeUndefined();
+    expect(reconciled.find(t => t.symbol === 'BROS')).toMatchObject({ quantity: 250, exitPrice: null });
+  });
+
+  test('reconcileOpenTradesWithBrokerPositions trims oldest open lots down to broker qty', () => {
+    const trades = [
+      {
+        symbol: 'MSCI',
+        side: 'long',
+        quantity: 25,
+        entryPrice: 634,
+        exitPrice: null,
+        entryTime: '2026-07-16T14:00:00Z',
+        exitTime: null,
+        instrumentType: 'stock',
+        accountIdentifier: '****5119',
+        commission: 1,
+        executionData: [{ type: 'entry', quantity: 25, price: 634 }]
+      },
+      {
+        symbol: 'MSCI',
+        side: 'long',
+        quantity: 10,
+        entryPrice: 640,
+        exitPrice: null,
+        entryTime: '2026-07-17T14:00:00Z',
+        exitTime: null,
+        instrumentType: 'stock',
+        accountIdentifier: '****5119',
+        commission: 0.4,
+        executionData: [{ type: 'entry', quantity: 10, price: 640 }]
+      }
+    ];
+
+    const brokerPositions = new Map([
+      ['****5119|MSCI', { symbol: 'MSCI', accountIdentifier: '****5119', quantity: 30, side: 'long', averagePrice: 635 }]
+    ]);
+
+    const reconciled = schwabService.reconcileOpenTradesWithBrokerPositions(trades, brokerPositions);
+    const opens = reconciled.filter(t => t.symbol === 'MSCI');
+    expect(opens.reduce((sum, t) => sum + t.quantity, 0)).toBe(30);
+    // Oldest 25-lot trimmed to 20; newer 10-lot kept
+    expect(opens).toEqual(expect.arrayContaining([
+      expect.objectContaining({ quantity: 20, entryPrice: 634 }),
+      expect.objectContaining({ quantity: 10, entryPrice: 640 })
+    ]));
   });
 
   test('partial exits split the entry commission pro rata without double counting', () => {
@@ -791,5 +1127,56 @@ describe('Schwab dedupe key construction (exit orderId|datetime)', () => {
     otherAccount.account_identifier = '****9999';
 
     expect(schwabService.isDuplicateTrade(trade, [otherAccount])).toBe(false);
+  });
+
+  test('a closed trade is NOT a duplicate of a same-entry open lot (stale open must be upgradeable)', () => {
+    const closed = buildRoundTripTrade();
+    const openExisting = asExistingRow(closed);
+    openExisting.id = 'open-trade-id';
+    openExisting.exit_price = null;
+    openExisting.exit_time = null;
+    openExisting.pnl = null;
+    openExisting.executions = closed.executionData.filter(e => e.type === 'entry');
+
+    expect(schwabService.isDuplicateTrade(closed, [openExisting])).toBe(false);
+    expect(schwabService.findUpgradeableOpenTrade(closed, [openExisting])).toEqual(
+      expect.objectContaining({ id: 'open-trade-id' })
+    );
+  });
+
+  test('a full close is NOT a duplicate of an earlier partial-close import that shares some exit fills', () => {
+    const partial = {
+      symbol: 'MRK',
+      side: 'long',
+      quantity: 300,
+      entry_price: 126.73,
+      exit_price: 126.49,
+      trade_date: '2026-07-20',
+      instrument_type: 'stock',
+      account_identifier: '****5119',
+      executions: [
+        { type: 'entry', orderId: 'entry-1', datetime: '2026-07-20T14:50:06Z', price: 126.73, quantity: 300 },
+        { type: 'exit', orderId: 'exit-1', datetime: '2026-07-20T14:59:54Z', price: 126.59, quantity: 150 },
+        { type: 'exit', orderId: 'exit-2', datetime: '2026-07-20T15:00:13Z', price: 126.39, quantity: 150 }
+      ]
+    };
+    const fullClose = {
+      symbol: 'MRK',
+      side: 'long',
+      quantity: 500,
+      entryPrice: 126.73,
+      exitPrice: 126.2862,
+      tradeDate: '2026-07-20',
+      instrumentType: 'stock',
+      accountIdentifier: '****5119',
+      executionData: [
+        { type: 'entry', orderId: 'entry-1', datetime: '2026-07-20T14:50:06Z', price: 126.73, quantity: 500 },
+        { type: 'exit', orderId: 'exit-1', datetime: '2026-07-20T14:59:54Z', price: 126.59, quantity: 150 },
+        { type: 'exit', orderId: 'exit-2', datetime: '2026-07-20T15:00:13Z', price: 126.39, quantity: 150 },
+        { type: 'exit', orderId: 'exit-3', datetime: '2026-07-20T15:03:17Z', price: 125.98, quantity: 200 }
+      ]
+    };
+
+    expect(schwabService.isDuplicateTrade(fullClose, [partial])).toBe(false);
   });
 });
