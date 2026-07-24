@@ -587,6 +587,90 @@ class SchwabService {
 
 
   /**
+   * Repair ALREADY-PERSISTED open equity rows against live broker inventory.
+   *
+   * reconcileOpenTradesWithBrokerPositions only filters the trade list produced
+   * by the current parse, so phantom opens written by earlier syncs survive in
+   * the database forever (a re-sync just reports them as duplicates). This
+   * trims persisted open lots down to what the broker actually holds.
+   *
+   * Only accounts in `syncedAccountIdentifiers` are touched — we have no
+   * authoritative position data for excluded accounts, so their rows are left
+   * alone rather than being deleted as false phantoms.
+   *
+   * @param {string} userId
+   * @param {string} connectionId
+   * @param {Map} brokerPositions - from buildBrokerEquityPositionMap
+   * @param {string[]} syncedAccountIdentifiers - redacted ids actually synced
+   * @param {{ dryRun?: boolean }} [options]
+   */
+  async reconcilePersistedOpenEquity(userId, connectionId, brokerPositions, syncedAccountIdentifiers, { dryRun = false } = {}) {
+    const positionMap = brokerPositions || new Map();
+    const syncedAccounts = new Set(syncedAccountIdentifiers || []);
+    const summary = { deleted: [], resized: [], keptLots: 0, skippedAccounts: new Set() };
+
+    const { rows } = await db.query(
+      `SELECT id, symbol, side, quantity, entry_time, account_identifier
+       FROM trades
+       WHERE user_id = $1 AND broker_connection_id = $2
+         AND exit_price IS NULL AND exit_time IS NULL
+         AND (instrument_type IS NULL OR instrument_type = 'stock')
+       ORDER BY entry_time ASC NULLS FIRST`,
+      [userId, connectionId]
+    );
+
+    const groups = new Map();
+    for (const row of rows) {
+      const account = row.account_identifier || 'unknown';
+      if (!syncedAccounts.has(account)) {
+        summary.skippedAccounts.add(account);
+        continue;
+      }
+      const key = `${account}|${row.symbol}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+
+    for (const [key, lots] of groups.entries()) {
+      const broker = positionMap.get(key);
+      const brokerQty = broker ? Number(broker.quantity) || 0 : 0;
+      const dbQty = lots.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
+
+      if (dbQty <= brokerQty) {
+        summary.keptLots += lots.length;
+        continue;
+      }
+
+      let excess = dbQty - brokerQty;
+      console.log(`[SCHWAB] Persisted open reconcile ${key}: db=${dbQty} broker=${brokerQty} trimming=${excess}`);
+
+      // Drop newest lots first so the earliest (original) entry survives.
+      for (const lot of [...lots].reverse()) {
+        if (excess <= 0) break;
+        const qty = Number(lot.quantity) || 0;
+        if (qty <= excess) {
+          excess -= qty;
+          summary.deleted.push({ key, id: lot.id, quantity: qty });
+          if (!dryRun) await Trade.delete(lot.id, userId);
+        } else {
+          const keepQty = qty - excess;
+          excess = 0;
+          summary.resized.push({ key, id: lot.id, from: qty, to: keepQty });
+          if (!dryRun) {
+            await db.query(
+              `UPDATE trades SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+              [keepQty, lot.id]
+            );
+          }
+        }
+      }
+    }
+
+    summary.skippedAccounts = [...summary.skippedAccounts];
+    return summary;
+  }
+
+  /**
    * Net signed position per account|symbol from parsed fills (API amount sign).
    * Used to drop false futures opens when FIFO is skewed by truncated history
    * or earlier orphan lots stealing closes.
@@ -1656,9 +1740,10 @@ class SchwabService {
     // Reconcile FIFO open remnants against live broker positions. TRADE history
     // alone misses journals / corp-actions, which leaves false opens (and can
     // omit real holds that never appear as unmatched openings).
+    let brokerPositions = null;
     try {
       const accountsWithPositions = await this.getAccounts(accessToken, { fields: 'positions' });
-      const brokerPositions = this.buildBrokerEquityPositionMap(accountsWithPositions, excludedLast4s);
+      brokerPositions = this.buildBrokerEquityPositionMap(accountsWithPositions, excludedLast4s);
       console.log(`[SCHWAB] Live equity positions: ${brokerPositions.size}`);
       const beforeOpen = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
       trades = this.reconcileOpenTradesWithBrokerPositions(trades, brokerPositions);
@@ -1715,6 +1800,31 @@ class SchwabService {
       }
     } catch (error) {
       console.warn('[SCHWAB] Expired futures open cleanup failed:', error.message);
+    }
+
+    // Equity equivalent of the futures cleanup above: trim persisted open lots
+    // that exceed live broker inventory. The pre-import reconcile can only
+    // filter this run's parse output, so phantom opens written by earlier syncs
+    // would otherwise stay open forever (a re-sync just counts them dupes).
+    if (brokerPositions) {
+      try {
+        const syncedAccountIdentifiers = accountsToSync.map(a => this.redactAccountNumber(a.accountNumber));
+        const repair = await this.reconcilePersistedOpenEquity(
+          connection.userId,
+          connection.id,
+          brokerPositions,
+          syncedAccountIdentifiers
+        );
+        if (repair.deleted.length || repair.resized.length) {
+          console.log(
+            `[SCHWAB] Persisted open equity repaired: ${repair.deleted.length} lot(s) deleted, ` +
+            `${repair.resized.length} resized (kept ${repair.keptLots} in sync)`
+          );
+          await AnalyticsCache.invalidate(connection.userId);
+        }
+      } catch (error) {
+        console.warn('[SCHWAB] Persisted open equity reconcile failed:', error.message);
+      }
     }
 
     console.log(`[SCHWAB] Sync complete: ${result.imported} imported, ${result.duplicates} duplicates`);

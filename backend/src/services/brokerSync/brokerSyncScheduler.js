@@ -156,6 +156,98 @@ class BrokerSyncScheduler {
   }
 
   /**
+   * Force a sync of every active auto-sync connection the first time a given
+   * deployment boots, so shipping code that changes sync/matching behavior takes
+   * effect immediately instead of waiting for the next scheduled window.
+   *
+   * Keyed on the deployment id, NOT on process start: this service runs
+   * scale-to-zero, so the process boots on every container wake. The upsert is
+   * an atomic claim (single-row table) so concurrent replicas sync only once.
+   *
+   * Disable with ENABLE_POST_DEPLOY_SYNC=false.
+   */
+  async syncOnNewDeployment() {
+    const logPrefix = '[BROKER-SCHEDULER]';
+
+    if (process.env.ENABLE_POST_DEPLOY_SYNC === 'false') {
+      console.log(`${logPrefix} Post-deploy sync disabled (ENABLE_POST_DEPLOY_SYNC=false)`);
+      return 0;
+    }
+
+    const deploymentId = process.env.RAILWAY_DEPLOYMENT_ID || process.env.RAILWAY_GIT_COMMIT_SHA;
+    if (!deploymentId) {
+      // Local/self-hosted: no deployment identity to key on, so skip rather than
+      // syncing on every restart.
+      console.log(`${logPrefix} No deployment id in env, skipping post-deploy sync`);
+      return 0;
+    }
+    const commitSha = process.env.RAILWAY_GIT_COMMIT_SHA || null;
+
+    let claimed;
+    try {
+      claimed = await db.query(
+        `INSERT INTO deploy_sync_state (id, deployment_id, commit_sha, connections_synced, synced_at)
+         VALUES (TRUE, $1, $2, 0, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE
+           SET deployment_id = EXCLUDED.deployment_id,
+               commit_sha = EXCLUDED.commit_sha,
+               connections_synced = 0,
+               synced_at = CURRENT_TIMESTAMP
+         WHERE deploy_sync_state.deployment_id IS DISTINCT FROM EXCLUDED.deployment_id
+         RETURNING deployment_id`,
+        [deploymentId, commitSha]
+      );
+    } catch (error) {
+      console.error(`${logPrefix} Post-deploy sync claim failed:`, error.message);
+      return 0;
+    }
+
+    if (claimed.rowCount === 0) {
+      console.log(`${logPrefix} Deployment ${deploymentId} already post-deploy synced, skipping`);
+      return 0;
+    }
+
+    // Every active auto-sync connection, regardless of next_scheduled_sync --
+    // that schedule filter is what processDueSyncs() is for.
+    const { rows: connections } = await db.query(
+      `SELECT id, broker_type, user_id FROM broker_connections
+       WHERE auto_sync_enabled = true
+         AND connection_status = 'active'
+         AND consecutive_failures < 3
+       ORDER BY updated_at DESC`
+    );
+
+    if (connections.length === 0) {
+      console.log(`${logPrefix} Post-deploy sync: no active auto-sync connections`);
+      return 0;
+    }
+
+    console.log(`${logPrefix} New deployment ${deploymentId} - force-syncing ${connections.length} connection(s)`);
+
+    let synced = 0;
+    for (const connection of connections) {
+      try {
+        const result = await brokerSyncService.syncConnection(connection.id, { syncType: 'scheduled' });
+        synced++;
+        console.log(
+          `${logPrefix} Post-deploy sync ${connection.broker_type} ${connection.id}: ` +
+          `imported=${result?.imported || 0} duplicates=${result?.duplicates || 0}`
+        );
+      } catch (error) {
+        console.error(`${logPrefix} Post-deploy sync failed for ${connection.id}:`, error.message);
+      }
+    }
+
+    await db.query(
+      `UPDATE deploy_sync_state SET connections_synced = $1 WHERE id = TRUE`,
+      [synced]
+    ).catch(() => { /* bookkeeping only */ });
+
+    console.log(`${logPrefix} Post-deploy sync complete: ${synced}/${connections.length} connection(s) synced`);
+    return synced;
+  }
+
+  /**
    * Start the scheduler
    */
   start() {
@@ -165,6 +257,13 @@ class BrokerSyncScheduler {
     // Clean up any syncs that were interrupted by a previous server restart
     this.cleanupZombieSyncs().catch(error => {
       console.error('[BROKER-SCHEDULER] Zombie cleanup failed:', error);
+    });
+
+    // Fresh deployment? Sync everything now so new matching logic applies
+    // immediately. Runs before the due-check below; syncing advances
+    // next_scheduled_sync, so processDueSyncs() then finds nothing to redo.
+    this.syncOnNewDeployment().catch(error => {
+      console.error('[BROKER-SCHEDULER] Post-deploy sync failed:', error);
     });
 
     // Run immediately on start
