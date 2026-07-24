@@ -53,10 +53,16 @@ function normalizeAddressList(value) {
 class EmailService {
   static async logEmail({ recipient, subject, emailType, htmlBody, textBody, status, errorMessage, userId, metadata }) {
     try {
+      const resolvedStatus = status || 'sent';
+      // Compute sent_at here rather than a `CASE WHEN $6 = 'sent'` in SQL: reusing
+      // $6 both as the status column value and inside the CASE made Postgres deduce
+      // two conflicting types for the parameter (varchar vs text), which threw
+      // "inconsistent types deduced for parameter $6" and dropped the log row.
+      const sentAt = resolvedStatus === 'sent' ? new Date() : null;
       await db.query(
         `INSERT INTO email_log (recipient, subject, email_type, html_body, text_body, status, error_message, user_id, metadata, sent_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $6 = 'sent' THEN NOW() ELSE NULL END)`,
-        [recipient, subject, emailType, htmlBody, textBody, status || 'sent', errorMessage || null, userId || null, JSON.stringify(metadata || {})]
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [recipient, subject, emailType, htmlBody, textBody, resolvedStatus, errorMessage || null, userId || null, JSON.stringify(metadata || {}), sentAt]
       );
     } catch (err) {
       console.error('Failed to log email:', err.message);
