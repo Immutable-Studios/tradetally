@@ -88,7 +88,7 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
     expect(EmailService.sendDailyReviewEmail).not.toHaveBeenCalled();
   });
 
-  it('skips when the user opted out and skipOptOutCheck is not set', async () => {
+  it('skips when the user opted out and force is not set', async () => {
     User.getSettings.mockResolvedValue({ daily_review_email_enabled: false });
 
     const result = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
@@ -97,12 +97,12 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
     expect(EmailService.sendDailyReviewEmail).not.toHaveBeenCalled();
   });
 
-  it('sends when the user opted out but skipOptOutCheck is set (explicit resend)', async () => {
+  it('sends when the user opted out but force is set (explicit resend)', async () => {
     User.getSettings.mockResolvedValue({ daily_review_email_enabled: false });
 
     const result = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
       shareDate: '2026-07-18',
-      skipOptOutCheck: true
+      force: true
     });
 
     expect(result).not.toBeNull();

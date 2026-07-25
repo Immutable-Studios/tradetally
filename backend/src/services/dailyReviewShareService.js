@@ -121,6 +121,18 @@ class DailyReviewShareService {
       }
     }
 
+    // Sync brokers BEFORE composing the email. This call was written but never
+    // wired up, so every daily email until now reported pre-sync state -- the
+    // day's later fills were missing from the counts, P&L and share page.
+    // Failures are logged and swallowed: a stale email beats no email.
+    const syncResult = await this.syncBrokersForUser(userId);
+    if (syncResult.synced > 0 || syncResult.failed > 0) {
+      console.log(
+        `[DAILY-REVIEW-SHARE] Pre-email sync for ${userId}: ` +
+        `${syncResult.synced} synced, ${syncResult.failed} failed`
+      );
+    }
+
     const resolvedDate = shareDate || await this.getDefaultShareDate(userId);
     const expiresAt = new Date(Date.now() + DEFAULT_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
 

@@ -6,7 +6,7 @@ import api from '@/services/api'
  * day's review through the token-scoped /public/daily-review/:token/* routes
  * (see backend/src/routes/dailyReviewShare.routes.js) instead of the
  * authenticated /analytics and /trades endpoints. Shape mirrors
- * useDailyReview so DayActivityList/DailyOpenPositions can be reused as-is.
+ * useDailyReview so DayActivityList can be reused as-is.
  */
 export function useSharedDailyReview(token) {
   const loading = ref(true)

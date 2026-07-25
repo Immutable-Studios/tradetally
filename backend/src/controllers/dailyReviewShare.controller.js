@@ -1,5 +1,6 @@
 const DailyReviewShare = require('../models/DailyReviewShare');
 const AccountBalanceService = require('../services/accountBalanceService');
+const { getUserTimezone, getDateInTimezone } = require('../utils/timezone');
 
 module.exports = {
   /**
@@ -21,18 +22,23 @@ module.exports = {
 
       let accountStrip = dailyShare.account_snapshot || null;
 
-      // Backfill if this share was created before account snapshots / open heat,
-      // or refresh when viewing "today" so the strip stays current.
-      const today = new Date().toISOString().slice(0, 10);
-      const shouldRefresh = !accountStrip
-        || dailyShareDate === today
-        || accountStrip.openHeat == null;
-      if (shouldRefresh) {
+      // Only ever refresh the strip for TODAY. Capturing live balances for a past
+      // date stamped current Net Liq / cash onto that day and, worse,
+      // captureAccountSnapshotForDay persists into equity_snapshots at the old
+      // date and overwrites user_settings.account_equity -- so merely opening a
+      // three-week-old share link rewrote the historical equity series that the
+      // K-Ratio calculation reads. A stale strip on an old share is correct:
+      // it is a snapshot of that day, not a live view.
+      // "Today" must be the USER's today, not UTC's -- a UTC comparison flips
+      // hours early/late for anyone outside UTC, so a share could refresh on the
+      // wrong calendar day (or fail to refresh on the right one).
+      const userId = user.id || dailyShare.user_id;
+      const timezone = await getUserTimezone(userId);
+      const today = getDateInTimezone(new Date(), timezone);
+
+      if (dailyShareDate === today) {
         try {
-          const live = await AccountBalanceService.captureAccountSnapshotForDay(
-            user.id || dailyShare.user_id,
-            dailyShareDate
-          );
+          const live = await AccountBalanceService.captureAccountSnapshotForDay(userId, dailyShareDate);
           if (live) {
             accountStrip = live;
             await DailyReviewShare.updateAccountSnapshot(dailyShare.id, live);

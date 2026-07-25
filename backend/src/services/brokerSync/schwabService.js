@@ -648,6 +648,121 @@ class SchwabService {
 
 
   /**
+   * Net share quantity moved by RECEIVE_AND_DELIVER events, keyed account|symbol.
+   *
+   * These are corporate actions and share transfers -- they never appear as
+   * TRADEs, so FIFO alone can never balance the book when shares leave an account
+   * without a sell (e.g. expiring warrants, delistings).
+   *
+   * Netting is essential, not cosmetic. Schwab books a share-class or
+   * registration move as an offsetting PAIR on the same symbol and date
+   * (ARMG -1337 then +1337). Treating each leg as a position event would invent
+   * a close and a re-open that never happened. Only the residual matters.
+   *
+   * CURRENCY legs are skipped (cash, not shares).
+   *
+   * @param {Array} transactions - raw Schwab transactions payload
+   * @returns {Map<string, number>} account|symbol -> net share delta (never 0)
+   */
+  buildTransferAdjustments(transactions) {
+    const net = new Map();
+
+    for (const tx of transactions || []) {
+      if (tx?.type !== 'RECEIVE_AND_DELIVER') continue;
+      const accountIdentifier = tx._accountIdentifier || 'unknown';
+
+      for (const item of tx.transferItems || []) {
+        const instrument = item?.instrument || {};
+        const symbol = instrument.symbol;
+        if (!symbol || instrument.assetType === 'CURRENCY') continue;
+
+        const amount = Number(item.amount);
+        if (!Number.isFinite(amount) || amount === 0) continue;
+
+        const key = `${accountIdentifier}|${symbol}`;
+        net.set(key, (net.get(key) || 0) + amount);
+      }
+    }
+
+    // Drop residuals that netted to (near) zero -- the offsetting-pair case.
+    for (const [key, value] of [...net.entries()]) {
+      if (Math.abs(value) < 1e-9) net.delete(key);
+    }
+
+    return net;
+  }
+
+  /**
+   * Close open lots that corporate actions removed from the account.
+   *
+   * Only NEGATIVE residuals are applied: shares left the account, so the
+   * matching open lots are gone. Positive residuals (shares arriving, e.g. the
+   * post-split side of a reverse split) are deliberately NOT turned into opens --
+   * they have no cost basis in the transaction (`price: 0`), and inventing one
+   * would corrupt P&L. Those surface via the live-position reconcile instead.
+   *
+   * Removed lots are dropped rather than exited at a fabricated price, so no
+   * fake P&L enters analytics.
+   *
+   * @param {Array} trades
+   * @param {Map<string, number>} adjustments - from buildTransferAdjustments
+   * @returns {Array} trades with corporate-action-removed opens dropped/trimmed
+   */
+  applyTransferAdjustmentsToOpens(trades, adjustments) {
+    if (!adjustments || adjustments.size === 0) return trades;
+
+    const kept = [];
+    const opensByKey = new Map();
+
+    for (const trade of trades || []) {
+      const isOpen = trade.exitPrice == null && trade.exitTime == null;
+      const isEquity = !trade.instrumentType || trade.instrumentType === 'stock';
+      if (!isOpen || !isEquity) {
+        kept.push(trade);
+        continue;
+      }
+      const key = `${trade.accountIdentifier || 'unknown'}|${trade.symbol}`;
+      if (!opensByKey.has(key)) opensByKey.set(key, []);
+      opensByKey.get(key).push(trade);
+    }
+
+    for (const [key, opens] of opensByKey.entries()) {
+      const residual = adjustments.get(key) || 0;
+      if (residual >= 0) {
+        kept.push(...opens);
+        continue;
+      }
+
+      let toRemove = Math.abs(residual);
+      // Oldest first: a corporate action retires the earliest lots.
+      opens.sort((a, b) => new Date(a.entryTime || 0) - new Date(b.entryTime || 0));
+      let removedQty = 0;
+
+      for (const trade of opens) {
+        const qty = Number(trade.quantity) || 0;
+        if (toRemove <= 0) {
+          kept.push(trade);
+          continue;
+        }
+        if (qty <= toRemove) {
+          toRemove -= qty;
+          removedQty += qty;
+          continue;
+        }
+        removedQty += toRemove;
+        kept.push(this._resizeOpenTrade(trade, qty - toRemove));
+        toRemove = 0;
+      }
+
+      if (removedQty > 0) {
+        console.log(`[SCHWAB] Corporate action removed ${removedQty} share(s) of open ${key}`);
+      }
+    }
+
+    return kept;
+  }
+
+  /**
    * Repair ALREADY-PERSISTED open equity rows against live broker inventory.
    *
    * reconcileOpenTradesWithBrokerPositions only filters the trade list produced
@@ -828,7 +943,15 @@ class SchwabService {
       `${SCHWAB_API_BASE}/accounts/${accountHash}/transactions`,
       {
         params: {
-          types: 'TRADE',
+          // RECEIVE_AND_DELIVER carries corporate actions / share transfers, which
+          // never appear as TRADEs. Without them FIFO can never balance: shares
+          // leave the account with no matching sell and the lot stays open forever
+          // (verified: OPENW/OPENZ/OPENL warrants -172 each, DUST reverse split).
+          // parseTransactionDetails still ignores them as fills; they are consumed
+          // separately by buildTransferAdjustments(). JOURNAL/DIVIDEND_OR_INTEREST
+          // are deliberately NOT requested -- on this account every one of them is
+          // CURRENCY_USD cash movement, so they affect equity, never share counts.
+          types: 'TRADE,RECEIVE_AND_DELIVER',
           startDate: this.formatDateForApi(startDate),
           endDate: this.formatDateForApi(endDate, true)
         },
@@ -1036,6 +1159,21 @@ class SchwabService {
 
     // Match opening and closing transactions using FIFO
     let trades = this.matchTransactions(validTransactions);
+
+    // Corporate actions / share transfers never appear as TRADEs, so FIFO leaves
+    // their lots open forever. Apply the netted residuals before any other
+    // reconcile so phantom opens die at the source instead of being cleaned up
+    // later against live positions (which are unavailable when an account is flat).
+    const transferAdjustments = this.buildTransferAdjustments(transactions);
+    if (transferAdjustments.size > 0) {
+      const beforeOpens = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
+      trades = this.applyTransferAdjustmentsToOpens(trades, transferAdjustments);
+      const afterOpens = trades.filter(t => t.exitPrice == null && t.exitTime == null).length;
+      console.log(
+        `[SCHWAB] Transfer/corporate-action residuals: ${transferAdjustments.size} symbol(s), ` +
+        `opens ${beforeOpens} -> ${afterOpens}`
+      );
+    }
 
     // Futures: Schwab positions API is unreliable; align opens to fill-stream net
     // (within this fetch window, unmatched FIFO opens should equal fill-net).

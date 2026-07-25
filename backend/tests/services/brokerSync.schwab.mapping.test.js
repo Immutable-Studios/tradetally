@@ -1255,3 +1255,91 @@ describe('Schwab broker-position trust assessment', () => {
     expect(Trade.delete).toHaveBeenCalledWith('t1', 'user-1');
   });
 });
+
+describe('Schwab corporate-action / transfer handling', () => {
+  const rnd = (symbol, amount, assetType = 'EQUITY', account = '****5119') => ({
+    type: 'RECEIVE_AND_DELIVER',
+    _accountIdentifier: account,
+    tradeDate: '2026-04-30T14:00:00+0000',
+    transferItems: [{ instrument: { symbol, assetType }, amount, price: 0 }]
+  });
+
+  // Schwab books a share-class/registration move as an offsetting pair on the
+  // same symbol. Booking each leg would invent a close and a re-open.
+  it('nets offsetting same-symbol legs to nothing', () => {
+    const adj = schwabService.buildTransferAdjustments([
+      rnd('ARMG', -1337), rnd('ARMG', 1337)
+    ]);
+    expect(adj.size).toBe(0);
+  });
+
+  it('keeps the residual of an unpaired removal', () => {
+    const adj = schwabService.buildTransferAdjustments([rnd('OPENW', -172)]);
+    expect(adj.get('****5119|OPENW')).toBe(-172);
+  });
+
+  it('nets a reverse split down to its true delta', () => {
+    // DUST 10:1 reverse split: 6142 old shares out, 614 new shares in.
+    const adj = schwabService.buildTransferAdjustments([
+      rnd('DUST', -6142, 'COLLECTIVE_INVESTMENT'), rnd('DUST', 614, 'COLLECTIVE_INVESTMENT')
+    ]);
+    expect(adj.get('****5119|DUST')).toBe(-5528);
+  });
+
+  it('ignores CURRENCY legs (cash, not shares)', () => {
+    const adj = schwabService.buildTransferAdjustments([
+      rnd('CURRENCY_USD', -13171.2, 'CURRENCY')
+    ]);
+    expect(adj.size).toBe(0);
+  });
+
+  it('keys residuals per account so accounts cannot bleed into each other', () => {
+    const adj = schwabService.buildTransferAdjustments([
+      rnd('OPENW', -172, 'EQUITY', '****5119'),
+      rnd('OPENW', 172, 'EQUITY', '****7790')
+    ]);
+    expect(adj.get('****5119|OPENW')).toBe(-172);
+    expect(adj.get('****7790|OPENW')).toBe(172);
+  });
+
+  const openTrade = (symbol, quantity, entryTime, account = '****5119') => ({
+    symbol, quantity, side: 'long', instrumentType: 'stock',
+    entryPrice: 10, exitPrice: null, entryTime, exitTime: null,
+    accountIdentifier: account, executionData: [{ type: 'entry', quantity }]
+  });
+
+  it('drops open lots that a corporate action removed, oldest first', () => {
+    const trades = [
+      openTrade('OPENW', 100, '2026-01-01T14:30:00Z'),
+      openTrade('OPENW', 72, '2026-02-01T14:30:00Z')
+    ];
+    const adj = new Map([['****5119|OPENW', -172]]);
+    const result = schwabService.applyTransferAdjustmentsToOpens(trades, adj);
+    expect(result).toHaveLength(0);
+  });
+
+  it('trims the boundary lot on a partial removal', () => {
+    const trades = [openTrade('OPENW', 100, '2026-01-01T14:30:00Z')];
+    const adj = new Map([['****5119|OPENW', -40]]);
+    const result = schwabService.applyTransferAdjustmentsToOpens(trades, adj);
+    expect(result).toHaveLength(1);
+    expect(result[0].quantity).toBe(60);
+  });
+
+  // Shares arriving have price 0 in the payload; inventing a basis would corrupt P&L.
+  it('never fabricates opens from positive residuals', () => {
+    const trades = [openTrade('DUST', 614, '2026-03-05T14:30:00Z')];
+    const adj = new Map([['****5119|DUST', 614]]);
+    const result = schwabService.applyTransferAdjustmentsToOpens(trades, adj);
+    expect(result).toHaveLength(1);
+    expect(result[0].quantity).toBe(614);
+  });
+
+  it('leaves closed trades and non-equity instruments alone', () => {
+    const closed = { ...openTrade('OPENW', 100, '2026-01-01T14:30:00Z'), exitPrice: 12, exitTime: '2026-01-05T14:30:00Z' };
+    const future = { ...openTrade('/MESZ5', 2, '2026-01-01T14:30:00Z'), instrumentType: 'future' };
+    const adj = new Map([['****5119|OPENW', -100], ['****5119|/MESZ5', -2]]);
+    const result = schwabService.applyTransferAdjustmentsToOpens([closed, future], adj);
+    expect(result).toHaveLength(2);
+  });
+});
