@@ -781,8 +781,15 @@ function focusTradeView() {
   if (rightPad > 0) {
     // Data already ends with synthetic pad bars — pin the right edge so that
     // empty space is visible and the trade sits left/center of the viewport.
-    const visibleBars = Math.max(24, rightPad + 16)
-    const barSpace = Math.max(8, Math.min(18, availableWidth / visibleBars))
+    //
+    // Fit the whole loaded series rather than a fixed bar count. The provider
+    // deliberately returns the prior session plus the full execution day; a
+    // fixed ~36-bar window showed only the last three hours of it and left
+    // that context scrolled off-screen, which read as the wider window never
+    // having shipped. Floor the bar space rather than the bar count so a long
+    // multi-day trade compresses instead of getting clipped again.
+    const visibleBars = Math.max(24, normalizedBars.length + rightPad)
+    const barSpace = Math.max(2, Math.min(18, availableWidth / visibleBars))
     chart.setBarSpace(barSpace)
     chart.setMaxOffsetRightDistance(barSpace * rightPad)
     chart.setOffsetRightDistance(barSpace * Math.min(4, rightPad))

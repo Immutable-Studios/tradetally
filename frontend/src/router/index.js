@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useRegistrationMode } from '@/composables/useRegistrationMode'
 import { useAnalytics } from '@/composables/useAnalytics'
+import { parseDailyDateParam } from '@/utils/dailyDateParam'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -182,6 +183,19 @@ const router = createRouter({
       name: 'daily-share',
       component: () => import('@/views/DailySharedView.vue'),
       meta: { public: true }
+    },
+    {
+      // Bookmarkable per-day review, e.g. /daily/7272026 (MMDDYYYY, or ISO).
+      // Normalizes into /daily?date=YYYY-MM-DD rather than rendering directly,
+      // so the date has exactly one source of truth and the page's own date
+      // picker keeps working. The digit-constrained param cannot shadow
+      // /daily/share/:token above. An unreadable date falls through to today.
+      path: '/daily/:date(\\d{6,8}|\\d{4}-\\d{2}-\\d{2})',
+      name: 'daily-date',
+      redirect: (to) => {
+        const date = parseDailyDateParam(to.params.date)
+        return { path: '/daily', query: date ? { ...to.query, date } : { ...to.query } }
+      }
     },
     {
       path: '/calendar',
