@@ -113,7 +113,43 @@ function sumAccounts(accounts) {
 /**
  * Journal realized P/L for exits on shareDate in the user's timezone.
  */
-async function sumRealizedPlForDay(userId, shareDate, timezone) {
+/** Last four digits of an account identifier ('****5119' and '5119' both -> '5119'). */
+function accountLast4(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits ? digits.slice(-4) : null;
+}
+
+/** True when a Schwab account number/mask belongs to the wanted account. */
+function matchesAccount(candidate, wanted) {
+  if (!wanted) return true;
+  const wantedLast4 = accountLast4(wanted);
+  if (!wantedLast4) return false;
+  return accountLast4(candidate) === wantedLast4;
+}
+
+/**
+ * SQL restricting a trades query to a single account.
+ *
+ * Compared on the last four digits rather than the literal string: callers
+ * configure '5119' while trades store Schwab's masked '****5119'. Returns an
+ * empty clause for a null account so every call site can append it blindly.
+ */
+function accountScopeClause(accountIdentifier, paramIndex) {
+  if (!accountIdentifier) return { clause: '', param: null };
+  if (accountIdentifier === '__unsorted__') {
+    return { clause: ` AND (account_identifier IS NULL OR account_identifier = '')`, param: null };
+  }
+  const last4 = accountLast4(accountIdentifier);
+  if (!last4) {
+    return { clause: ` AND account_identifier = $${paramIndex}`, param: accountIdentifier };
+  }
+  return {
+    clause: ` AND RIGHT(REGEXP_REPLACE(COALESCE(account_identifier, ''), '\\D', '', 'g'), 4) = $${paramIndex}`,
+    param: last4
+  };
+}
+
+async function sumRealizedPlForDay(userId, shareDate, timezone, accountIdentifier = null) {
   const tz = timezone || 'UTC';
   const excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId).catch(() => []);
   const params = [userId, tz, shareDate];
@@ -122,13 +158,19 @@ async function sumRealizedPlForDay(userId, shareDate, timezone) {
     params.push(excluded);
     accountClause = ` AND (account_identifier IS NULL OR account_identifier = '' OR account_identifier <> ALL($4::text[]))`;
   }
+  // Scoping to one account matters as much here as on the balances: a
+  // per-account review that reports the other book's realized P&L in its
+  // "Day P&L" is the same mixing, one field over.
+  const scope = accountScopeClause(accountIdentifier, params.length + 1);
+  if (scope.param !== null) params.push(scope.param);
+
   const result = await db.query(
     `SELECT COALESCE(SUM(pnl), 0)::float AS realized
      FROM trades
      WHERE user_id = $1
        AND exit_time IS NOT NULL
        AND (exit_time AT TIME ZONE $2)::date = $3::date
-       ${accountClause}`,
+       ${accountClause}${scope.clause}`,
     params
   );
   return round2(num(result.rows[0]?.realized) ?? 0) ?? 0;
@@ -137,7 +179,7 @@ async function sumRealizedPlForDay(userId, shareDate, timezone) {
 /**
  * Symbols with at least one still-open lot entered before shareDate (overnight holds).
  */
-async function symbolsWithOvernightOpenLots(userId, shareDate, timezone) {
+async function symbolsWithOvernightOpenLots(userId, shareDate, timezone, accountIdentifier = null) {
   const tz = timezone || 'UTC';
   const excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId).catch(() => []);
   const params = [userId, tz, shareDate];
@@ -146,6 +188,9 @@ async function symbolsWithOvernightOpenLots(userId, shareDate, timezone) {
     params.push(excluded);
     accountClause = ` AND (account_identifier IS NULL OR account_identifier = '' OR account_identifier <> ALL($4::text[]))`;
   }
+  const scope = accountScopeClause(accountIdentifier, params.length + 1);
+  if (scope.param !== null) params.push(scope.param);
+
   const result = await db.query(
     `SELECT DISTINCT UPPER(symbol) AS symbol
      FROM trades
@@ -153,7 +198,7 @@ async function symbolsWithOvernightOpenLots(userId, shareDate, timezone) {
        AND exit_time IS NULL
        AND exit_price IS NULL
        AND (entry_time AT TIME ZONE $2)::date < $3::date
-       ${accountClause}`,
+       ${accountClause}${scope.clause}`,
     params
   );
   return new Set(result.rows.map((r) => r.symbol).filter(Boolean));
@@ -164,7 +209,7 @@ async function symbolsWithOvernightOpenLots(userId, shareDate, timezone) {
  * - Lots opened today → unrealized from average price (day P/L ≈ open P/L)
  * - Overnight holds → Schwab currentDayProfitLoss (vs prior close)
  */
-function openDayPlFromSchwabPositions(accountsPayload, excludedLast4s, overnightSymbols) {
+function openDayPlFromSchwabPositions(accountsPayload, excludedLast4s, overnightSymbols, accountIdentifier = null) {
   let openDayPl = 0;
   let sawAny = false;
 
@@ -174,6 +219,7 @@ function openDayPlFromSchwabPositions(accountsPayload, excludedLast4s, overnight
     const last4 = accountNumber ? String(accountNumber).slice(-4) : null;
     const masked = last4 ? `****${last4}` : null;
     if (!masked || schwabService.isSchwabAccountExcluded(masked, excludedLast4s)) continue;
+    if (!matchesAccount(masked, accountIdentifier)) continue;
 
     for (const position of sec.positions || []) {
       const assetType = position.instrument?.assetType;
@@ -220,11 +266,12 @@ async function computeTradingDayPl(userId, shareDate, {
   timezone,
   accessToken,
   accountsPayload = null,
-  excludedLast4s = []
+  excludedLast4s = [],
+  accountIdentifier = null
 } = {}) {
   const { getUserTimezone } = require('../utils/timezone');
   const tz = timezone || await getUserTimezone(userId);
-  const realizedPl = await sumRealizedPlForDay(userId, shareDate, tz);
+  const realizedPl = await sumRealizedPlForDay(userId, shareDate, tz, accountIdentifier);
 
   // Still compute open-day marks for diagnostics / future use, but do not
   // fold them into dayPl — that double-counted vs the Day P&L summary card.
@@ -235,8 +282,8 @@ async function computeTradingDayPl(userId, shareDate, {
       payload = await schwabService.getAccounts(accessToken, { fields: 'positions' });
     }
     if (payload) {
-      const overnightSymbols = await symbolsWithOvernightOpenLots(userId, shareDate, tz);
-      openDayPl = openDayPlFromSchwabPositions(payload, excludedLast4s, overnightSymbols);
+      const overnightSymbols = await symbolsWithOvernightOpenLots(userId, shareDate, tz, accountIdentifier);
+      openDayPl = openDayPlFromSchwabPositions(payload, excludedLast4s, overnightSymbols, accountIdentifier);
     }
   } catch (error) {
     console.warn('[ACCOUNT-BALANCE] Open day P/L fetch failed:', error.message);
@@ -298,7 +345,8 @@ async function fetchSchwabAccountStrip(userId, { shareDate, accountIdentifier = 
   try {
     const trading = await computeTradingDayPl(userId, dayKey, {
       accountsPayload: payload,
-      excludedLast4s: excluded
+      excludedLast4s: excluded,
+      accountIdentifier
     });
     strip.dayPl = trading.dayPl;
     strip.realizedPl = trading.realizedPl;
@@ -312,7 +360,8 @@ async function fetchSchwabAccountStrip(userId, { shareDate, accountIdentifier = 
   try {
     const heat = await computeOpenHeat(userId, {
       accessToken,
-      excludedLast4s: excluded
+      excludedLast4s: excluded,
+      accountIdentifier
     });
     strip.openHeat = heat.openHeat;
     strip.openHeatPositions = heat.positions;
@@ -353,14 +402,21 @@ async function persistEquitySnapshot(userId, shareDate, equityAmount) {
  * Resolve equity denominator for a day: live Schwab strip, else snapshot row,
  * else user_settings.account_equity.
  */
-async function resolveEquityForDay(userId, shareDate, { preferLive = false } = {}) {
+async function resolveEquityForDay(userId, shareDate, { preferLive = false, accountIdentifier = null } = {}) {
   if (preferLive) {
-    const live = await fetchSchwabAccountStrip(userId, { shareDate }).catch((error) => {
+    const live = await fetchSchwabAccountStrip(userId, { shareDate, accountIdentifier }).catch((error) => {
       console.warn('[ACCOUNT-BALANCE] Live fetch failed:', error.message);
       return null;
     });
     if (live?.equityForPct != null) return { equity: live.equityForPct, strip: live };
   }
+
+  // Both fallbacks below are user-level: equity_snapshots and
+  // user_settings.account_equity hold combined equity across accounts. For an
+  // account-scoped caller that is the wrong denominator — every "% of equity"
+  // would be silently understated by the other book's size. No number beats a
+  // wrong one, so give up rather than approximate.
+  if (accountIdentifier) return { equity: null, strip: null };
 
   try {
     const snap = await db.query(
@@ -441,7 +497,7 @@ function defaultHeatForPosition(openProfit) {
 /**
  * Aggregate open journal lots by symbol+side for heat sizing.
  */
-async function loadOpenPositionLots(userId) {
+async function loadOpenPositionLots(userId, accountIdentifier = null) {
   const excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId).catch(() => []);
   const params = [userId];
   let accountClause = '';
@@ -449,6 +505,11 @@ async function loadOpenPositionLots(userId) {
     params.push(excluded);
     accountClause = ` AND (account_identifier IS NULL OR account_identifier = '' OR account_identifier <> ALL($2::text[]))`;
   }
+
+  // Open heat is $ risk across open positions. Left unscoped, a single-account
+  // review reports risk it is not carrying.
+  const scope = accountScopeClause(accountIdentifier, params.length + 1);
+  if (scope.param !== null) params.push(scope.param);
 
   const result = await db.query(
     `SELECT
@@ -465,7 +526,7 @@ async function loadOpenPositionLots(userId) {
      WHERE user_id = $1
        AND exit_time IS NULL
        AND exit_price IS NULL
-       ${accountClause}
+       ${accountClause}${scope.clause}
      GROUP BY UPPER(symbol), LOWER(side)
      ORDER BY UPPER(symbol)`,
     params
@@ -481,9 +542,10 @@ async function loadOpenPositionLots(userId) {
  */
 async function computeOpenHeat(userId, {
   accessToken,
-  excludedLast4s = []
+  excludedLast4s = [],
+  accountIdentifier = null
 } = {}) {
-  const lots = await loadOpenPositionLots(userId);
+  const lots = await loadOpenPositionLots(userId, accountIdentifier);
   if (!lots.length) {
     return { openHeat: 0, positions: [] };
   }

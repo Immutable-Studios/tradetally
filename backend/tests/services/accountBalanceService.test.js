@@ -102,6 +102,41 @@ describe('openDayPlFromSchwabPositions', () => {
     // SOXS: 81060 - 52.3*1500 = 2610; BROS overnight: -692
     expect(openDay).toBe(1918);
   });
+
+  describe('account scoping', () => {
+    // A per-account review must not fold the other book's positions into its
+    // open day P/L — the same mixing that showed up as a combined Net Liq.
+    const twoAccounts = [
+      payload[0],
+      {
+        securitiesAccount: {
+          accountNumber: '99997790',
+          positions: [{
+            instrument: { symbol: 'AAPL', assetType: 'EQUITY' },
+            longQuantity: 100,
+            shortQuantity: 0,
+            averagePrice: 100,
+            marketValue: 11000,
+            currentDayProfitLoss: 5000
+          }]
+        }
+      }
+    ];
+
+    it('sums every account when no account is given', () => {
+      // 1918 from ****5119 plus 1000 unrealized from ****7790.
+      expect(openDayPlFromSchwabPositions(twoAccounts, [], new Set(['BROS']))).toBe(2918);
+    });
+
+    it('counts only the requested account', () => {
+      expect(openDayPlFromSchwabPositions(twoAccounts, [], new Set(['BROS']), '****5119')).toBe(1918);
+      expect(openDayPlFromSchwabPositions(twoAccounts, [], new Set(), '****7790')).toBe(1000);
+    });
+
+    it('matches an account written without the mask', () => {
+      expect(openDayPlFromSchwabPositions(twoAccounts, [], new Set(), '7790')).toBe(1000);
+    });
+  });
 });
 
 describe('tradeNotional + equityPercents', () => {

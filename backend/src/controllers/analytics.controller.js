@@ -2020,17 +2020,31 @@ const analyticsController = {
       let accountStrip = null;
       let equityForPct = null;
       try {
+        // Scope the strip to the account being viewed. Without this the Net Liq
+        // shown on a single-account Daily Review was the sum of every account,
+        // and equityForPct below propagates into each trade's "% of equity", so
+        // one unscoped call skewed the whole page. Only a single-account filter
+        // can be honored — "two of my three accounts" has no one strip.
+        const requestedAccounts = String(req.query.accounts || '')
+          .split(',').map(s => s.trim()).filter(Boolean);
+        const scopedAccount = requestedAccounts.length === 1 ? requestedAccounts[0] : null;
+
         // Prefer live Schwab for "today"; otherwise fall back to equity_snapshots.
         const today = new Date().toISOString().slice(0, 10);
         const resolved = await AccountBalanceService.resolveEquityForDay(
           req.user.id,
           dateStr,
-          { preferLive: dateStr === today }
+          { preferLive: dateStr === today, accountIdentifier: scopedAccount }
         );
         accountStrip = resolved.strip;
         equityForPct = resolved.equity;
         if (!accountStrip && dateStr === today) {
-          accountStrip = await AccountBalanceService.captureAccountSnapshotForDay(req.user.id, dateStr);
+          accountStrip = await AccountBalanceService.captureAccountSnapshotForDay(req.user.id, dateStr, {
+            accountIdentifier: scopedAccount,
+            // equity_snapshots is a user-level series; a per-account figure
+            // must never be written into it.
+            persistEquity: !scopedAccount
+          });
           equityForPct = accountStrip?.equityForPct ?? equityForPct;
         }
       } catch (error) {
