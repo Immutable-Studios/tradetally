@@ -734,15 +734,26 @@ class EmailService {
    * (no login required - the link carries an opaque share token) plus a
    * quick P&L/trade-count summary.
    * @param {object} user - User row (id, email, username, full_name)
-   * @param {object} options - { dateLabel, shareUrl, tradeCount, dayPnL }
+   * @param {object} options - { dateLabel, shareUrl, tradeCount, dayPnL, recipients }
+   *   recipients: optional address list replacing the user's own email
    */
-  static async sendDailyReviewEmail(user, { dateLabel, shareUrl, tradeCount = 0, dayPnL = null }) {
+  static async sendDailyReviewEmail(user, { dateLabel, shareUrl, tradeCount = 0, dayPnL = null, recipients = null }) {
     if (!this.isConfigured()) {
       console.log('Email not configured, skipping daily review email');
       return;
     }
 
-    const email = user.email;
+    // Routing can be overridden (see utils/dailyReviewRecipients) so the review
+    // lands somewhere other than the login address. Each recipient gets its own
+    // send rather than a shared to/cc list: addresses stay private from each
+    // other and email_log keeps one row per delivery.
+    const targets = normalizeAddressList(recipients).filter(Boolean);
+    const mailTo = targets.length ? targets : [user.email].filter(Boolean);
+    if (!mailTo.length) {
+      console.log('Daily review email skipped: no recipient address');
+      return;
+    }
+
     const userId = user.id;
     const safeDateLabel = escapeHtml(dateLabel);
     const hasPnl = dayPnL !== null && dayPnL !== undefined;
@@ -782,27 +793,39 @@ class EmailService {
     const html = this.getBaseTemplate(`Daily Review - ${dateLabel}`, content);
     const textSummary = `Your daily review for ${dateLabel} is ready. ${tradeCount} trade${tradeCount === 1 ? '' : 's'}${hasPnl ? `, day P&L ${pnlFormatted}` : ''}. View it here (no login required): ${shareUrl}`;
 
-    const mailOptions = {
-      from: { name: 'TradeTally', address: this.getTransactionalFromAddress() },
-      to: email,
-      subject: `Daily review - ${dateLabel}`,
-      html,
-      text: textSummary,
-      headers: {
-        'X-Entity-Ref-ID': `daily-review-${Date.now()}`,
-        'Message-ID': `<daily-review-${Date.now()}@tradetally.io>`
-      }
-    };
+    const subject = `Daily review - ${dateLabel}`;
+    let firstError = null;
 
-    try {
-      await this.sendMail(mailOptions);
-      console.log('Daily review email sent to', maskEmail(email));
-      await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL } });
-    } catch (error) {
-      console.error('Error sending daily review email to', maskEmail(email), error);
-      await this.logEmail({ recipient: email, subject: mailOptions.subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'failed', errorMessage: error.message, userId, metadata: { dateLabel } });
-      throw error;
+    for (const [index, email] of mailTo.entries()) {
+      // Unique per recipient: identical Message-IDs get collapsed or dropped as
+      // duplicates by some mail clients.
+      const ref = `daily-review-${Date.now()}-${index}`;
+      const mailOptions = {
+        from: { name: 'TradeTally', address: this.getTransactionalFromAddress() },
+        to: email,
+        subject,
+        html,
+        text: textSummary,
+        headers: {
+          'X-Entity-Ref-ID': ref,
+          'Message-ID': `<${ref}@tradetally.io>`
+        }
+      };
+
+      try {
+        await this.sendMail(mailOptions);
+        console.log('Daily review email sent to', maskEmail(email));
+        await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL } });
+      } catch (error) {
+        // Keep going: one bad address must not cost the other recipients their
+        // review. The first failure is rethrown once every send is attempted.
+        console.error('Error sending daily review email to', maskEmail(email), error);
+        await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'failed', errorMessage: error.message, userId, metadata: { dateLabel } });
+        if (!firstError) firstError = error;
+      }
     }
+
+    if (firstError) throw firstError;
   }
 
   /**

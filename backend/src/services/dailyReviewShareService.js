@@ -13,6 +13,7 @@ const EmailService = require('./emailService');
 const TradeQueries = require('./tradeQueries');
 const AccountBalanceService = require('./accountBalanceService');
 const { getUserTimezone, getDateInTimezone } = require('../utils/timezone');
+const { resolveDailyReviewRecipients } = require('../utils/dailyReviewRecipients');
 
 const DEFAULT_EXPIRES_DAYS = parseInt(process.env.DAILY_REVIEW_SHARE_EXPIRES_DAYS, 10) || 30;
 
@@ -157,7 +158,8 @@ class DailyReviewShareService {
       dateLabel: formatDateLabel(resolvedDate),
       shareUrl,
       tradeCount,
-      dayPnL
+      dayPnL,
+      recipients: resolveDailyReviewRecipients(user)
     });
 
     return share;
@@ -167,11 +169,32 @@ class DailyReviewShareService {
    * Daily batch over all active users with an email address, honoring the
    * opt-out flag. Per-user failures are isolated so one bad row can't sink
    * the run.
+   *
+   * @param {object} options
+   * @param {boolean} options.skipIfSentToday - Skip users who already got a
+   *   daily review recently. Defaults to true because there are now two
+   *   triggers (the in-process cron and the internal HTTP endpoint) and both
+   *   can fire on the same day; without this the user gets two emails. Pass
+   *   false to force a re-send.
    */
-  static async runDailyBatch() {
+  static async runDailyBatch({ skipIfSentToday = true } = {}) {
     const stats = { users: 0, sent: 0, skipped: 0, failed: 0 };
     let users;
     try {
+      // An 18-hour window rather than "today": the batch runs mid-afternoon
+      // Pacific, which is already the next UTC day for part of the year, so a
+      // calendar-day comparison would miss its own previous run. Consecutive
+      // daily runs are 24h apart and so are never wrongly skipped.
+      const dedupeClause = skipIfSentToday
+        ? `AND NOT EXISTS (
+             SELECT 1 FROM email_log el
+             WHERE el.user_id = u.id
+               AND el.email_type = 'daily_review'
+               AND el.status = 'sent'
+               AND el.sent_at > NOW() - INTERVAL '18 hours'
+           )`
+        : '';
+
       const result = await db.query(`
         SELECT u.id
         FROM users u
@@ -179,6 +202,7 @@ class DailyReviewShareService {
         WHERE u.is_active = true
           AND u.email IS NOT NULL AND u.email != ''
           AND COALESCE(s.daily_review_email_enabled, true) = true
+          ${dedupeClause}
         ORDER BY u.id
       `);
       users = result.rows;

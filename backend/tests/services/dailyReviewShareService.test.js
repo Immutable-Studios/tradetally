@@ -125,6 +125,22 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
     expect(options.shareUrl).toContain('/daily/share/abc123');
     expect(options.tradeCount).toBe(3);
     expect(options.dayPnL).toBe(125.5);
+    expect(options.recipients).toEqual(['trader@example.com']);
+  });
+
+  it('routes the email to the configured recipients for the owner account', async () => {
+    process.env.DAILY_REVIEW_OWNER_EMAIL = 'trader@example.com';
+    process.env.DAILY_REVIEW_RECIPIENTS = 'personal@example.com, partner@example.com';
+
+    try {
+      await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+
+      const [, options] = EmailService.sendDailyReviewEmail.mock.calls[0];
+      expect(options.recipients).toEqual(['personal@example.com', 'partner@example.com']);
+    } finally {
+      delete process.env.DAILY_REVIEW_OWNER_EMAIL;
+      delete process.env.DAILY_REVIEW_RECIPIENTS;
+    }
   });
 });
 
@@ -160,5 +176,24 @@ describe('DailyReviewShareService.runDailyBatch', () => {
     expect(stats.skipped).toBe(1);
     expect(stats.failed).toBe(1);
     expect(BrokerSyncService.syncConnection).toHaveBeenCalledWith('conn-1', { syncType: 'scheduled' });
+  });
+
+  it('excludes users already emailed in the last 18 hours by default', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+
+    await DailyReviewShareService.runDailyBatch();
+
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toContain("el.email_type = 'daily_review'");
+    expect(sql).toContain("el.status = 'sent'");
+    expect(sql).toContain("INTERVAL '18 hours'");
+  });
+
+  it('drops the dedupe clause when a re-send is forced', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+
+    await DailyReviewShareService.runDailyBatch({ skipIfSentToday: false });
+
+    expect(db.query.mock.calls[0][0]).not.toContain('email_log');
   });
 });

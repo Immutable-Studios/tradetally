@@ -1,0 +1,87 @@
+name: Daily review email
+
+# External trigger for the Daily Review batch.
+#
+# The app's in-process cron (DAILY_REVIEW_EMAIL_CRON) only fires while the
+# container is running, and this deployment has Railway app sleeping enabled —
+# an idle instance is stopped long before the afternoon cron time, so the batch
+# silently never runs. This workflow's request both wakes the app and runs the
+# batch, which is why the trigger lives outside the app.
+#
+# Requires repo secret INTERNAL_AUTOMATION_SECRET, matching the environment
+# variable of the same name on the Railway service (see
+# middleware/internalServiceAuth.js). Optional repo variable APP_URL overrides
+# the default production URL.
+
+on:
+  schedule:
+    # 21:15 UTC = 13:15 PST / 14:15 PDT. A single UTC time avoids DST juggling,
+    # and both land after the 13:00 PT US equity cash close, so the review
+    # always covers a settled day. GitHub may delay scheduled runs by a few
+    # minutes under load; nothing here depends on the exact minute.
+    - cron: '15 21 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-send even if a review already went out in the last 18h'
+        type: boolean
+        default: false
+
+# Never let two runs overlap; the app would reject the second with 409 anyway.
+concurrency:
+  group: daily-review-email
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    # Only the cloud deployment has an app to poke. Mirrors the repo gate in
+    # guard-public-no-cloud.yml so forks and the public repo no-op.
+    if: github.repository == 'Immutable-Studios/tradetally'
+    runs-on: ubuntu-latest
+    # The request is held open for the whole batch (broker sync + send), which
+    # is what keeps Railway from sleeping the container mid-run.
+    timeout-minutes: 20
+    steps:
+      - name: Trigger daily review batch
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://tradetally-app-production.up.railway.app' }}
+          SECRET: ${{ secrets.INTERNAL_AUTOMATION_SECRET }}
+          SKIP_IF_SENT: ${{ inputs.force == true && 'false' || 'true' }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "$SECRET" ]; then
+            echo "::error::INTERNAL_AUTOMATION_SECRET is not set on this repository"
+            exit 1
+          fi
+
+          # --retry-connrefused + a generous max-time cover the cold start: the
+          # first request has to wake a sleeping container before it is served.
+          code=$(curl -sS -o /tmp/response.json -w '%{http_code}' \
+            --max-time 900 --retry 3 --retry-delay 30 --retry-connrefused \
+            -X POST "$APP_URL/api/internal/cron/daily-review" \
+            -H "X-Internal-Service-Secret: $SECRET" \
+            -H 'X-Internal-Service-Name: github-actions' \
+            -H 'Content-Type: application/json' \
+            -d "{\"skipIfSentToday\": $SKIP_IF_SENT}") || {
+              echo "::error::Request to $APP_URL failed (curl exit $?)"
+              exit 1
+            }
+
+          echo "HTTP $code"
+          cat /tmp/response.json || true
+          echo
+
+          # 409 means a batch was already running — the work is happening, so
+          # this is not a failure worth paging over.
+          if [ "$code" = "409" ]; then
+            echo "::warning::A daily review batch was already in progress; skipping this trigger"
+            exit 0
+          fi
+
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Daily review trigger failed with HTTP $code"
+            exit 1
+          fi
+
+          echo "Daily review batch completed"
