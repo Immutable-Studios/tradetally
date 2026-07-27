@@ -18,6 +18,19 @@ const {
 const SCHWAB_MARKET_DATA_BASE = 'https://api.schwabapi.com/marketdata/v1';
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000; // 5 minutes before expiration
 
+/**
+ * UTC midnight of the session before `dayUTC`, skipping the weekend so a Monday
+ * trade shows Friday rather than an empty Sunday. Holidays are not modelled —
+ * an empty extra day costs nothing, a missing prior session costs context.
+ */
+function previousSessionStartUTC(dayUTC) {
+  const previous = new Date(dayUTC.getTime() - 24 * 60 * 60 * 1000);
+  while (previous.getUTCDay() === 0 || previous.getUTCDay() === 6) {
+    previous.setUTCDate(previous.getUTCDate() - 1);
+  }
+  return previous;
+}
+
 class SchwabMarketData {
   constructor() {
     this.rateLimitRemaining = 120; // Schwab rate limit: 120 requests/minute
@@ -376,7 +389,50 @@ class SchwabMarketData {
    * @param {number} toTimestamp - End timestamp (Unix seconds)
    * @returns {Promise<object[]|null>} Array of OHLCV candles or null
    */
+  /**
+   * Symbols to try for price history, in order.
+   *
+   * Schwab's pricehistory endpoint has no series for most dated futures
+   * contracts — ask it for MNQU26 and it returns nothing, which is why futures
+   * charts came back empty. The continuous roots (/MNQ, then the full-size
+   * /NQ) do have history, so they are tried first; the dated contract stays on
+   * the end as a last resort. Non-futures symbols are returned untouched.
+   */
+  chartSymbolCandidates(symbol) {
+    const upper = String(symbol || '').trim().toUpperCase();
+    if (!upper) return [];
+
+    const continuous = getContinuousChartSymbolCandidates(upper.replace(/^\//, ''));
+    if (!continuous.length) return [upper];
+
+    const candidates = [...continuous];
+    if (!candidates.includes(upper)) candidates.push(upper);
+    return candidates;
+  }
+
+  /**
+   * Candles plus the symbol they actually came from, so callers can label the
+   * chart with the contract that was plotted rather than the one requested.
+   */
+  async getCandlesWithSymbol(symbol, resolution, fromTimestamp, toTimestamp) {
+    for (const candidate of this.chartSymbolCandidates(symbol)) {
+      const candles = await this.fetchCandlesForSymbol(candidate, resolution, fromTimestamp, toTimestamp);
+      if (candles && candles.length) {
+        if (candidate !== String(symbol || '').toUpperCase()) {
+          console.log(`[SCHWAB-MARKET] ${symbol} has no price history; charted ${candidate} instead`);
+        }
+        return { candles, chartSymbol: candidate };
+      }
+    }
+    return { candles: null, chartSymbol: null };
+  }
+
   async getCandles(symbol, resolution, fromTimestamp, toTimestamp) {
+    const { candles } = await this.getCandlesWithSymbol(symbol, resolution, fromTimestamp, toTimestamp);
+    return candles;
+  }
+
+  async fetchCandlesForSymbol(symbol, resolution, fromTimestamp, toTimestamp) {
     const connection = await this.getActiveConnection();
     if (!connection) {
       return null;
@@ -502,11 +558,14 @@ class SchwabMarketData {
     let fromMs, toMs, intervalName;
 
     if (resolution === '5') {
-      // 5-minute chart: focus on the trade day(s) with extended trading hours.
-      // ~04:00 ET (09:00 UTC) on the entry day through ~20:00 ET (01:00 UTC next
-      // day) on the exit day. ET approximated as UTC-5 for simplicity.
+      // 5-minute chart: the prior trading session plus the full execution
+      // day(s), extended hours included. Starting at the entry day left no
+      // context for where price was coming from — prior-day range, gap and
+      // overnight levels are what make an entry readable. ~04:00 ET (09:00
+      // UTC) on the prior session through ~20:00 ET (01:00 UTC next day) on
+      // the exit day. ET approximated as UTC-5 for simplicity.
       intervalName = '5min';
-      fromMs = entryDateUTC.getTime() + 9 * 60 * 60 * 1000;
+      fromMs = previousSessionStartUTC(entryDateUTC).getTime() + 9 * 60 * 60 * 1000;
       toMs = exitDateUTC.getTime() + 25 * 60 * 60 * 1000;
     } else {
       // Daily chart: broad context, ~90 days before entry through ~14 days after
@@ -519,7 +578,7 @@ class SchwabMarketData {
     const fromTimestamp = Math.floor(fromMs / 1000);
     const toTimestamp = Math.floor(toMs / 1000);
 
-    const candles = await this.getCandles(symbol, resolution, fromTimestamp, toTimestamp);
+    const { candles, chartSymbol } = await this.getCandlesWithSymbol(symbol, resolution, fromTimestamp, toTimestamp);
 
     if (!candles || candles.length === 0) {
       return null;
@@ -530,6 +589,9 @@ class SchwabMarketData {
       interval: intervalName,
       resolution,
       candles,
+      // May differ from the requested symbol for futures (MNQU26 -> /MNQ), so
+      // the UI can say which contract is on screen.
+      chartSymbol,
       source: 'schwab'
     };
   }
