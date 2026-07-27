@@ -42,6 +42,7 @@ function recomputeRestoredTradePnl(tradeData, timezone) {
 }
 
 const maskEmail = require('../utils/maskEmail');
+const { isBeforeDataStart } = require('../utils/dataStartDate');
 
 /**
  * Backup Service
@@ -631,6 +632,15 @@ class BackupService {
           }
 
           if (tradeData.user_id && !validUserIds.has(tradeData.user_id)) {
+            results.trades.skipped++;
+            continue;
+          }
+
+          // Backups taken before the data start date cutoff still contain the
+          // purged history. Restoring it would reintroduce exactly what
+          // migration 239 removed (and trip the CHECK constraint), so drop
+          // those rows the same way we drop rows for unknown users.
+          if (isBeforeDataStart(tradeData.trade_date)) {
             results.trades.skipped++;
             continue;
           }

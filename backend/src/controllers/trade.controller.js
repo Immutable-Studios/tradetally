@@ -15,6 +15,7 @@ const symbolCategories = require('../utils/symbolCategories');
 const imageProcessor = require('../utils/imageProcessor');
 const ensureString = require('../utils/ensureString');
 const { parseTradeFilters, tradeFilterProfiles } = require('../utils/tradeFilters');
+const { DATA_START_DATE, isBeforeDataStart } = require('../utils/dataStartDate');
 const upload = require('../middleware/upload');
 const currencyConverter = require('../utils/currencyConverter');
 const path = require('path');
@@ -2367,6 +2368,7 @@ const tradeController = {
           let imported = 0;
           let failed = 0;
           let duplicates = 0;
+          let skippedBeforeDataStart = 0;
           const failedTrades = [];
 
           // Clear timeout since we're proceeding normally
@@ -2438,6 +2440,19 @@ const tradeController = {
           for (const tradeData of trades) {
             processedRows++;
             try {
+              // This instance stores no history before DATA_START_DATE. Drop
+              // those rows up front (mirroring how Trade.create derives
+              // trade_date) so they land in a dedicated skip count rather than
+              // the failure list.
+              if (isBeforeDataStart(tradeData.tradeDate || tradeData.exitTime || tradeData.entryTime)) {
+                skippedBeforeDataStart++;
+                if (skippedBeforeDataStart <= 20) {
+                  logger.logImport(`Skipping trade before data start date ${DATA_START_DATE}: ${tradeData.symbol} on ${tradeData.tradeDate || tradeData.entryTime}`);
+                }
+                await maybeUpdateImportProgress();
+                continue;
+              }
+
               // Skip duplicate detection for trades that are updates to existing
               // positions (isUpdate/existingTradeId set by the parser).
               if (tradeData.isUpdate && tradeData.existingTradeId) {
@@ -2517,7 +2532,7 @@ const tradeController = {
             await maybeUpdateImportProgress();
           }
 
-          logger.logImport(`Import completed: ${imported} imported, ${failed} failed, ${duplicates} duplicates skipped`);
+          logger.logImport(`Import completed: ${imported} imported, ${failed} failed, ${duplicates} duplicates skipped, ${skippedBeforeDataStart} before data start date (${DATA_START_DATE})`);
 
           // Schedule background CUSIP resolution if there are unresolved CUSIPs
           if (unresolvedCusips.length > 0) {
@@ -2532,6 +2547,8 @@ const tradeController = {
           // Build error_details with diagnostics information
           const errorDetails = {
             duplicates,
+            skippedBeforeDataStart,
+            dataStartDate: DATA_START_DATE,
             manualReviewItems,
             manualReviewCount: manualReviewItems.length,
             manual_review_items: manualReviewItems,
@@ -2560,8 +2577,10 @@ const tradeController = {
           }
 
           // Track zero_imported scenario: parser produced trades but none were actually imported
-          // Excludes: empty CSV (trades.length === 0), all duplicates (duplicates === trades.length)
-          if (imported === 0 && trades.length > 0 && duplicates < trades.length) {
+          // Excludes: empty CSV (trades.length === 0), all duplicates, and files
+          // that parsed fine but sit entirely before the data start date —
+          // none of those indicate a parser problem worth recording.
+          if (imported === 0 && trades.length > 0 && (duplicates + skippedBeforeDataStart) < trades.length) {
             try {
               const headerLine = getCsvHeaderLine(fileBuffer);
               const detectedBroker = detectBrokerFormat(fileBuffer);

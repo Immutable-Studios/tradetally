@@ -6,6 +6,7 @@ const { computeTradePnl } = require('../services/pnlEngine');
 const logger = require('../utils/logger');
 const { toSnakeCase } = require('../utils/caseConvert');
 const { buildTradeDateRangeClause } = require('../utils/tradeDateFilter');
+const { assertOnOrAfterDataStart } = require('../utils/dataStartDate');
 const OptionStrategyGroupingService = require('../services/optionStrategyGroupingService');
 const { getPublicTradeSqlColumns } = require('../utils/publicTrade');
 /**
@@ -257,6 +258,12 @@ class Trade {
         finalTradeDate = new Date(timestampToUse).toISOString().split('T')[0];
       }
     }
+
+    // Hard floor: this instance does not store history before DATA_START_DATE.
+    // Every writer funnels through here, so this is the one place that has to
+    // hold; bulk callers (CSV import, broker sync) filter earlier so they can
+    // report a skip count instead of a per-row failure.
+    assertOnOrAfterDataStart(finalTradeDate);
 
     // Auto-assign strategy if not provided by user
     let finalStrategy = strategy;
@@ -1408,6 +1415,14 @@ class Trade {
     // Resolve trade_date in user's timezone — entryTime is UTC, so splitting it directly off-by-ones for non-UTC users.
     if (updates.entryTime) {
       updates.tradeDate = await getUserLocalDate(userId, updates.entryTime);
+    }
+
+    // Editing a trade backwards past the cutoff is the same violation as
+    // creating one there. Checked after the timezone resolution above so we
+    // test the date that will actually be written, and so the caller gets a 400
+    // instead of a raw CHECK-constraint failure.
+    if (updates.tradeDate !== undefined) {
+      assertOnOrAfterDataStart(updates.tradeDate);
     }
 
     // Check if user is manually setting strategy - do this first to prevent re-classification from overwriting it

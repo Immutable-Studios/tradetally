@@ -144,10 +144,11 @@
                 v-model="form.syncStartDate"
                 type="date"
                 class="input"
+                :min="minSyncStartDate"
                 :max="todayIso"
               />
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                A shorter range reduces the number of rate-limited history requests.
+                A shorter range reduces the number of rate-limited history requests. Syncs never reach back past {{ DATA_START_DATE_LABEL }}.
               </p>
             </div>
 
@@ -174,7 +175,8 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { syncRangePresets, applyPresetToForm, todayIso } from '@/utils/syncRangePresets'
+import { syncRangePresets, applyPresetToForm, todayIso, minSyncStartDate } from '@/utils/syncRangePresets'
+import { DATA_START_DATE_LABEL } from '@/config/dataStart'
 
 const props = defineProps({
   loading: { type: Boolean, default: false },

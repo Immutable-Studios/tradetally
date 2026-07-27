@@ -10,6 +10,7 @@ const { parse } = require('csv-parse/sync');
 const { parseCSV } = require('../../utils/csvParser');
 const Trade = require('../../models/Trade');
 const BrokerConnection = require('../../models/BrokerConnection');
+const { isBeforeDataStart } = require('../../utils/dataStartDate');
 const db = require('../../config/database');
 const { computeTradePnl } = require('../pnlEngine');
 const { getUserTimezone } = require('../../utils/timezone');
@@ -583,6 +584,14 @@ class IBKRService {
 
     for (const tradeData of trades) {
       try {
+        // Pre-DATA_START_DATE trades are not stored on this instance. Skipping
+        // here keeps them out of the `failed` count that Trade.create's throw
+        // would otherwise produce.
+        if (isBeforeDataStart(tradeData.tradeDate)) {
+          skipped++;
+          continue;
+        }
+
         // Check for duplicates (may set isUpdate flag if trade has more executions)
         const isDuplicate = this.isDuplicateTrade(tradeData, existingTrades, existingContext);
 

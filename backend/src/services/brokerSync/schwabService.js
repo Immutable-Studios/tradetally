@@ -23,6 +23,7 @@ const {
   parseFuturesContractFields,
   isFuturesContractExpired
 } = require('../../utils/futuresUtils');
+const { isBeforeDataStart } = require('../../utils/dataStartDate');
 
 const SCHWAB_API_BASE = 'https://api.schwabapi.com/trader/v1';
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000; // Refresh 5 minutes before expiration
@@ -2148,6 +2149,14 @@ class SchwabService {
 
     for (const tradeData of trades) {
       try {
+        // Pre-DATA_START_DATE trades are not stored on this instance. Skipping
+        // here keeps them out of the `failed` count that Trade.create's throw
+        // would otherwise produce.
+        if (isBeforeDataStart(tradeData.tradeDate)) {
+          skipped++;
+          continue;
+        }
+
         // Check for duplicates
         const isDuplicate = this.isDuplicateTrade(tradeData, existingTrades);
 

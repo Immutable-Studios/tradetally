@@ -15,6 +15,8 @@
       </router-link>
     </div>
 
+    <DataStartNotice context="import" class="mb-6" />
+
     <!-- Guided onboarding: step 2 of tour -->
     <OnboardingCard
       v-if="authStore.onboardingStep === 2"
@@ -1189,6 +1191,7 @@
       :is-open="showImportResultsModal"
       :trades-imported="importResultsData.tradesImported"
       :duplicates-skipped="importResultsData.duplicatesSkipped"
+      :skipped-before-data-start="importResultsData.skippedBeforeDataStart"
       :diagnostics="importResultsData.diagnostics"
       :failed-trades="importResultsData.failedTrades"
       :manual-review-items="importResultsData.manualReviewItems"
@@ -1244,6 +1247,7 @@ const BrokerMismatchModal = defineAsyncComponent(() => import('@/components/impo
 const ImportResultsModal = defineAsyncComponent(() => import('@/components/import/ImportResultsModal.vue'))
 const ManualTradeReviewModal = defineAsyncComponent(() => import('@/components/import/ManualTradeReviewModal.vue'))
 import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
+import DataStartNotice from '@/components/common/DataStartNotice.vue'
 import BaseSelect from '@/components/common/BaseSelect.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { usePriceAlertNotifications } from '@/composables/usePriceAlertNotifications'
@@ -1424,6 +1428,7 @@ const importResultsData = ref({
   importId: null,
   tradesImported: 0,
   duplicatesSkipped: 0,
+  skippedBeforeDataStart: 0,
   diagnostics: null,
   failedTrades: [],
   manualReviewItems: [],
@@ -2484,6 +2489,7 @@ function handleImportResultsClose() {
     importId: null,
     tradesImported: 0,
     duplicatesSkipped: 0,
+    skippedBeforeDataStart: 0,
     diagnostics: null,
     failedTrades: [],
     manualReviewItems: [],
@@ -3165,6 +3171,7 @@ function pollImportStatus(importId) {
         const diagnostics = errorDetails.diagnostics || null
         const tradesImported = importLog?.trades_imported || 0
         const duplicatesSkipped = errorDetails.duplicates || 0
+        const skippedBeforeDataStart = errorDetails.skippedBeforeDataStart || 0
         const failedTrades = errorDetails.failedTrades || []
         const manualReviewItemsForImport = Array.isArray(errorDetails.manual_review_items)
           ? errorDetails.manual_review_items
@@ -3182,11 +3189,12 @@ function pollImportStatus(importId) {
         }
 
         // Show results modal if we have diagnostics or notable stats
-        if (diagnostics || tradesImported > 0 || duplicatesSkipped > 0 || failedTrades.length > 0 || manualReviewItemsForImport.length > 0) {
+        if (diagnostics || tradesImported > 0 || duplicatesSkipped > 0 || skippedBeforeDataStart > 0 || failedTrades.length > 0 || manualReviewItemsForImport.length > 0) {
           importResultsData.value = {
             importId,
             tradesImported,
             duplicatesSkipped,
+            skippedBeforeDataStart,
             diagnostics,
             failedTrades,
             manualReviewItems: manualReviewItemsForImport,

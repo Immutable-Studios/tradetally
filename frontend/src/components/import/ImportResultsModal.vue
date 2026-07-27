@@ -44,6 +44,16 @@
             </div>
           </div>
 
+          <div
+            v-if="skippedBeforeDataStart > 0"
+            class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+          >
+            <span class="font-medium">
+              {{ skippedBeforeDataStart }} trade{{ skippedBeforeDataStart === 1 ? '' : 's' }} dated before {{ DATA_START_DATE_LABEL }} {{ skippedBeforeDataStart === 1 ? 'was' : 'were' }} not imported.
+            </span>
+            This journal only tracks trades from {{ DATA_START_DATE_LABEL }} onward.
+          </div>
+
           <!-- Diagnostics Details -->
           <div v-if="diagnostics" class="mt-4">
             <p class="text-sm text-gray-600 dark:text-gray-400">
@@ -310,6 +320,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { CheckCircleIcon, ExclamationTriangleIcon, XCircleIcon, InformationCircleIcon, TrophyIcon } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/stores/auth'
+import { DATA_START_DATE_LABEL } from '@/config/dataStart'
 
 const authStore = useAuthStore()
 
@@ -323,6 +334,12 @@ const props = defineProps({
     default: 0
   },
   duplicatesSkipped: {
+    type: Number,
+    default: 0
+  },
+  // Rows the backend dropped for falling before DATA_START_DATE. Called out
+  // separately from generic skips so "my old trades vanished" is self-explaining.
+  skippedBeforeDataStart: {
     type: Number,
     default: 0
   },

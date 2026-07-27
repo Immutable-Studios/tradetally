@@ -1,6 +1,7 @@
 const Trade = require('../models/Trade');
 const Diary = require('../models/Diary');
 const Account = require('../models/Account');
+const { DATA_START_DATE } = require('../utils/dataStartDate');
 
 /**
  * Creates sample data for new users on billing-enabled instances.
@@ -9,7 +10,13 @@ const Account = require('../models/Account');
  */
 class SampleDataService {
   /**
-   * Generate trading dates relative to today, skipping weekends
+   * Generate trading dates relative to today, skipping weekends.
+   *
+   * Days are floored at DATA_START_DATE — Trade.create rejects anything older,
+   * so an unclamped walk backwards from yesterday would fail every sample trade
+   * (and with it new-user onboarding) until the cutoff is `count` trading days
+   * in the past. While the window is still narrow the samples bunch up on the
+   * cutoff date; they spread out on their own as it recedes.
    */
   static getTradingDays(count) {
     const days = [];
@@ -25,7 +32,10 @@ class SampleDataService {
       d.setDate(d.getDate() - 1);
     }
 
-    return days.reverse(); // Oldest first
+    const floor = new Date(`${DATA_START_DATE}T00:00:00Z`);
+    return days
+      .reverse() // Oldest first
+      .map(day => (day < floor ? new Date(floor) : day));
   }
 
   /**

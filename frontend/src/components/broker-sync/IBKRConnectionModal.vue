@@ -151,10 +151,11 @@
                 v-model="form.syncStartDate"
                 type="date"
                 class="input"
+                :min="minSyncStartDate"
                 :max="todayIso"
               />
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Only sync trades on or after this date. Leave as "All Time" to import the full history available from the broker.
+                Only sync trades on or after this date. "All Time" pulls everything available from {{ DATA_START_DATE_LABEL }} onward — this journal does not track trades before then.
               </p>
             </div>
           </form>
@@ -188,7 +189,8 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { syncRangePresets, applyPresetToForm, resolveActivePreset, todayIso } from '@/utils/syncRangePresets'
+import { syncRangePresets, applyPresetToForm, resolveActivePreset, todayIso, minSyncStartDate } from '@/utils/syncRangePresets'
+import { DATA_START_DATE_LABEL } from '@/config/dataStart'
 
 const props = defineProps({
   loading: {

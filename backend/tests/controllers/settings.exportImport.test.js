@@ -88,9 +88,9 @@ const tradeRow = {
   quantity: 100,
   entry_price: '190.25',
   exit_price: '195.50',
-  entry_time: '2025-03-01T14:30:00.000Z',
-  exit_time: '2025-03-01T15:45:00.000Z',
-  trade_date: '2025-03-01',
+  entry_time: '2026-08-01T14:30:00.000Z',
+  exit_time: '2026-08-01T15:45:00.000Z',
+  trade_date: '2026-08-01',
   pnl: '525.00',
   pnl_percent: '2.76',
   commission: '1.00',
@@ -98,8 +98,8 @@ const tradeRow = {
   broker: 'lightspeed',
   notes: 'gap and go',
   quality_metrics: { score: 87, factors: ['risk', 'timing'] },
-  created_at: '2025-03-01T16:00:00.000Z',
-  updated_at: '2025-03-01T16:00:00.000Z'
+  created_at: '2026-08-01T16:00:00.000Z',
+  updated_at: '2026-08-01T16:00:00.000Z'
 };
 
 const tagRow = { id: 'tag-1', user_id: USER_ID, name: 'momentum', color: '#ff8800' };
@@ -272,7 +272,7 @@ describe('settings controller v3.0 export/import', () => {
       user_settings: [settingsRow],
       trades: [tradeRow],
       tags: [tagRow],
-      equity_history: [{ user_id: USER_ID, date: '2025-03-01', equity: '25525.00', pnl: '525.00' }]
+      equity_history: [{ user_id: USER_ID, date: '2026-08-01', equity: '25525.00', pnl: '525.00' }]
     });
 
     expect(payload.exportVersion).toBe('3.0');
@@ -297,8 +297,8 @@ describe('settings controller v3.0 export/import', () => {
     expect(trade.symbol).toBe('AAPL');
     expect(trade.entryPrice).toBe('190.25');
     expect(trade.exitPrice).toBe('195.50');
-    expect(trade.entryTime).toBe('2025-03-01T14:30:00.000Z');
-    expect(trade.tradeDate).toBe('2025-03-01');
+    expect(trade.entryTime).toBe('2026-08-01T14:30:00.000Z');
+    expect(trade.tradeDate).toBe('2026-08-01');
     expect(trade.pnlPercent).toBe('2.76');
     // JSONB column exported as a live object, not a string.
     expect(trade.qualityMetrics).toEqual({ score: 87, factors: ['risk', 'timing'] });
@@ -318,7 +318,7 @@ describe('settings controller v3.0 export/import', () => {
 
     expect(payload.tags).toEqual([{ name: 'momentum', color: '#ff8800' }]);
     expect(payload.equityHistory).toEqual([
-      { date: '2025-03-01', equity: '25525.00', pnl: '525.00' }
+      { date: '2026-08-01', equity: '25525.00', pnl: '525.00' }
     ]);
   });
 
@@ -347,9 +347,9 @@ describe('settings controller v3.0 export/import', () => {
     expect(inserted.quantity).toBe(100);
     expect(inserted.entry_price).toBe('190.25');
     expect(inserted.exit_price).toBe('195.50');
-    expect(inserted.entry_time).toBe('2025-03-01T14:30:00.000Z');
-    expect(inserted.exit_time).toBe('2025-03-01T15:45:00.000Z');
-    expect(inserted.trade_date).toBe('2025-03-01');
+    expect(inserted.entry_time).toBe('2026-08-01T14:30:00.000Z');
+    expect(inserted.exit_time).toBe('2026-08-01T15:45:00.000Z');
+    expect(inserted.trade_date).toBe('2026-08-01');
     expect(inserted.pnl).toBe('525.00');
     expect(inserted.pnl_percent).toBe('2.76');
     expect(inserted.commission).toBe('1.00');
@@ -470,9 +470,9 @@ describe('settings controller v3.0 export/import', () => {
         quantity: 50,
         entryPrice: 250,
         exitPrice: 240,
-        entryTime: '2025-04-01T13:30:00.000Z',
-        exitTime: '2025-04-01T14:00:00.000Z',
-        tradeDate: '2025-04-01',
+        entryTime: '2026-09-01T13:30:00.000Z',
+        exitTime: '2026-09-01T14:00:00.000Z',
+        tradeDate: '2026-09-01',
         pnl: 500,
         pnlPercent: 4
       }]

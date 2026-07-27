@@ -5,6 +5,7 @@ const { validateAiProviderUrl } = require('../utils/urlSecurity');
 const encryptionService = require('../services/brokerSync/encryptionService');
 const { computeTradePnl } = require('../services/pnlEngine');
 const { getUserTimezone } = require('../utils/timezone');
+const { isBeforeDataStart } = require('../utils/dataStartDate');
 const { toCamelCase, toSnakeCase, keysToCamelCase, keysToSnakeCase } = require('../utils/caseConvert');
 const AnalyticsCache = require('../services/analyticsCache');
 const settingsCache = require('../services/settingsCache');
@@ -1115,6 +1116,17 @@ const settingsController = {
             const rawTrade = importData.trades[i];
             const trade = recomputeImportedTradePnl(rawTrade, importTimezone);
             try {
+              // Exports predating the data start date still carry the purged
+              // history; skip it rather than reintroducing it (the trades CHECK
+              // constraint would reject the insert anyway).
+              const exportedTradeDate = trade.tradeDate ?? trade.trade_date
+                ?? trade.exitTime ?? trade.exit_time
+                ?? trade.entryTime ?? trade.entry_time;
+              if (isBeforeDataStart(exportedTradeDate)) {
+                tradesSkipped++;
+                continue;
+              }
+
               // Duplicate detection: same for both v2 and v3
               const symbol = trade.symbol ?? trade[toSnakeCase('symbol')];
               const side = trade.side ?? trade[toSnakeCase('side')];

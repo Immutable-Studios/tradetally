@@ -363,6 +363,7 @@
                       v-model="execution.entryTime"
                       type="datetime-local"
                       step="1"
+                      :min="dataStartMin"
                       required
                       class="input"
                     />
@@ -377,6 +378,7 @@
                       v-model="execution.exitTime"
                       type="datetime-local"
                       step="1"
+                      :min="dataStartMin"
                       class="input"
                     />
                   </div>
@@ -518,6 +520,7 @@
                     v-model="execution.datetime"
                     type="datetime-local"
                     step="1"
+                    :min="dataStartMin"
                     required
                     class="input"
                   />
@@ -1527,6 +1530,12 @@ import { useStrategyOrder } from '@/composables/useStrategyOrder'
 import { useSetupOrder } from '@/composables/useSetupOrder'
 import { CURRENCY_OPTIONS } from '@/composables/useCurrencyFormatter'
 import { parseNullableNumber } from '@/utils/numbers'
+import { DATA_START_DATE } from '@/config/dataStart'
+
+// Floor for every date/time picker on this form. The backend rejects earlier
+// trades outright (400 BEFORE_DATA_START_DATE from Trade.create), so blocking
+// them in the picker saves a round trip and explains itself.
+const dataStartMin = `${DATA_START_DATE}T00:00`
 
 // Load section preferences from localStorage
 const defaultSectionPrefs = {

@@ -7,6 +7,8 @@
       </p>
     </div>
 
+    <DataStartNotice context="sync" class="mb-6" />
+
     <!-- IBKR Maintenance Notice -->
     <IBKRNoticeBanner />
 
@@ -357,6 +359,7 @@ import IBKRConnectionModal from '@/components/broker-sync/IBKRConnectionModal.vu
 import Trading212ConnectionModal from '@/components/broker-sync/Trading212ConnectionModal.vue'
 import ConnectionSettingsModal from '@/components/broker-sync/ConnectionSettingsModal.vue'
 import IBKRNoticeBanner from '@/components/broker-sync/IBKRNoticeBanner.vue'
+import DataStartNotice from '@/components/common/DataStartNotice.vue'
 import ManualTradeReviewModal from '@/components/import/ManualTradeReviewModal.vue'
 import ProUpgradePrompt from '@/components/ProUpgradePrompt.vue'
 

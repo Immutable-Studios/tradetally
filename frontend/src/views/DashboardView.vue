@@ -14,7 +14,16 @@
           >
             Viewing: <span class="ml-1 truncate">{{ selectedAccountLabel }}</span>
           </div>
-          
+
+          <!-- Standing reminder that history begins at the data start date, so
+               an empty or short-looking chart isn't read as missing data. -->
+          <div
+            class="mt-2 inline-flex max-w-full items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600 dark:bg-gray-700/50 dark:text-gray-300"
+            :title="`Trades before ${DATA_START_DATE_LABEL} were removed and are no longer recorded.`"
+          >
+            Tracking since {{ DATA_START_DATE_LABEL }}
+          </div>
+
           <!-- Market Status and Refresh Indicator -->
           <div class="mt-2 flex items-center space-x-4 text-xs">
             <div class="flex items-center space-x-2">
@@ -1634,6 +1643,7 @@ import { getRefreshInterval, shouldRefreshPrices, getMarketStatus } from '@/util
 import YearWrappedBanner from '@/components/yearWrapped/YearWrappedBanner.vue'
 import OnboardingCard from '@/components/onboarding/OnboardingCard.vue'
 import StockLogo from '@/components/common/StockLogo.vue'
+import { DATA_START_DATE_LABEL } from '@/config/dataStart'
 // Below-the-fold dashboard sections and modal-only panels are lazy-loaded so
 // their code (and deps like the news/earnings and chart helpers) drops out of
 // the DashboardView entry chunk. They mount as the user scrolls / opens the

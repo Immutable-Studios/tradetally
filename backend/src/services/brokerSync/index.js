@@ -6,6 +6,7 @@
 const BrokerConnection = require('../../models/BrokerConnection');
 const db = require('../../config/database');
 const AnalyticsCache = require('../analyticsCache');
+const { clampToDataStart } = require('../../utils/dataStartDate');
 const OptionStrategyGroupingService = require('../optionStrategyGroupingService');
 const ibkrService = require('./ibkrService');
 const schwabService = require('./schwabService');
@@ -61,6 +62,16 @@ class BrokerSyncService {
         ? connection.syncStartDate.toISOString().slice(0, 10)
         : String(connection.syncStartDate).slice(0, 10);
       startDate = floor;
+    }
+
+    // Raise whatever window we ended up with to the instance-wide data start
+    // date. A connection configured for "All Time" (syncStartDate null) would
+    // otherwise pull years of executions that Trade.create then rejects one by
+    // one; clamping here means we never ask the broker for them.
+    const clampedStartDate = clampToDataStart(startDate);
+    if (clampedStartDate !== startDate) {
+      console.log(`[BROKER-SYNC] Raising sync start from ${startDate || 'all time'} to data start date ${clampedStartDate}`);
+      startDate = clampedStartDate;
     }
 
     // Create sync log

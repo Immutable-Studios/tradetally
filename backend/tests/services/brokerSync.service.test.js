@@ -51,11 +51,11 @@ describe('broker sync duplicate protection', () => {
       side: 'long',
       quantity: 10,
       entryPrice: 100,
-      entryTime: '2026-03-06T15:00:00Z',
-      tradeDate: '2026-03-06',
+      entryTime: '2026-08-06T15:00:00Z',
+      tradeDate: '2026-08-06',
       executionData: [
         {
-          datetime: '2026-03-06T15:00:00Z',
+          datetime: '2026-08-06T15:00:00Z',
           quantity: 10,
           type: 'entry'
         }
@@ -82,12 +82,12 @@ describe('broker sync duplicate protection', () => {
         side: 'long',
         quantity: 1,
         entryPrice: 125,
-        entryTime: '2026-03-06T15:00:00Z',
-        tradeDate: '2026-03-06',
+        entryTime: '2026-08-06T15:00:00Z',
+        tradeDate: '2026-08-06',
         currency: 'USD',
         executionData: [
           {
-            datetime: '2026-03-06T15:00:00Z',
+            datetime: '2026-08-06T15:00:00Z',
             quantity: 1,
             price: 125,
             action: 'buy'
@@ -112,15 +112,15 @@ describe('broker sync duplicate protection', () => {
     db.query.mockResolvedValueOnce({ rows: [] });
 
     await ibkrService.getExistingTradesForDuplicateCheck('user-1', [
-      { tradeDate: '2026-03-05' },
-      { entryTime: '2026-03-07T12:30:00Z' }
+      { tradeDate: '2026-08-05' },
+      { entryTime: '2026-08-07T12:30:00Z' }
     ]);
 
     const [query, params] = db.query.mock.calls[0];
     expect(query).toContain('trade_date >= $2');
     expect(query).toContain('trade_date <= $3');
     expect(query).not.toContain('LIMIT 1000');
-    expect(params).toEqual(['user-1', '2026-03-05', '2026-03-07']);
+    expect(params).toEqual(['user-1', '2026-08-05', '2026-08-07']);
   });
 
   test('IBKR duplicate detection falls back to closed-trade fields when executions do not match', () => {
@@ -132,10 +132,10 @@ describe('broker sync duplicate protection', () => {
         entryPrice: 100,
         exitPrice: 104,
         pnl: 40,
-        entryTime: '2026-03-06T15:00:00Z',
-        tradeDate: '2026-03-06',
+        entryTime: '2026-08-06T15:00:00Z',
+        tradeDate: '2026-08-06',
         executionData: [
-          { datetime: '2026-03-06T15:00:05Z', quantity: 10, price: 100, action: 'buy' }
+          { datetime: '2026-08-06T15:00:05Z', quantity: 10, price: 100, action: 'buy' }
         ]
       },
       [
@@ -146,11 +146,11 @@ describe('broker sync duplicate protection', () => {
           entry_price: 100,
           exit_price: 104,
           pnl: 40,
-          entry_time: '2026-03-06T15:00:00Z',
-          trade_date: '2026-03-06',
+          entry_time: '2026-08-06T15:00:00Z',
+          trade_date: '2026-08-06',
           instrument_type: 'stock',
           executions: [
-            { datetime: '2026-03-06T15:10:00Z', quantity: 10, price: 104, action: 'sell' }
+            { datetime: '2026-08-06T15:10:00Z', quantity: 10, price: 104, action: 'sell' }
           ]
         }
       ],
@@ -163,8 +163,8 @@ describe('broker sync duplicate protection', () => {
   test('IBKR execution matching uses order IDs when they are present', () => {
     expect(
       ibkrService.executionsMatch(
-        { orderId: 'abc123', datetime: '2026-03-06T15:00:00Z', quantity: 5, price: 100 },
-        { orderId: 'abc123', datetime: '2026-03-06T15:30:00Z', quantity: 5, price: 101 }
+        { orderId: 'abc123', datetime: '2026-08-06T15:00:00Z', quantity: 5, price: 100 },
+        { orderId: 'abc123', datetime: '2026-08-06T15:30:00Z', quantity: 5, price: 101 }
       )
     ).toBe(true);
   });
@@ -401,14 +401,14 @@ describe('broker sync duplicate protection', () => {
           quantity: 5,
           entry_price: 100,
           exit_price: 105,
-          entry_time: '2026-03-06T14:30:00Z',
-          exit_time: '2026-03-06T15:00:00Z',
-          trade_date: '2026-03-06',
+          entry_time: '2026-08-06T14:30:00Z',
+          exit_time: '2026-08-06T15:00:00Z',
+          trade_date: '2026-08-06',
           pnl: 25,
           instrument_type: 'stock',
           executions: [
             {
-              datetime: '2026-03-06T15:00:00Z',
+              datetime: '2026-08-06T15:00:00Z',
               type: 'exit',
               orderId: 'exit-123'
             }
@@ -424,14 +424,14 @@ describe('broker sync duplicate protection', () => {
         quantity: 5,
         entryPrice: 100,
         exitPrice: 105,
-        entryTime: '2026-03-06T14:30:00Z',
-        exitTime: '2026-03-06T15:00:00Z',
-        tradeDate: '2026-03-06',
+        entryTime: '2026-08-06T14:30:00Z',
+        exitTime: '2026-08-06T15:00:00Z',
+        tradeDate: '2026-08-06',
         pnl: 25,
         instrumentType: 'stock',
         executionData: [
           {
-            datetime: '2026-03-06T15:00:00Z',
+            datetime: '2026-08-06T15:00:00Z',
             type: 'exit',
             orderId: 'exit-123'
           }
@@ -451,15 +451,15 @@ describe('broker sync duplicate protection', () => {
     db.query.mockResolvedValueOnce({ rows: [] });
 
     await schwabService.getExistingTrades('user-1', [
-      { tradeDate: '2026-03-05' },
-      { exitTime: '2026-03-08T09:15:00Z' }
+      { tradeDate: '2026-08-05' },
+      { exitTime: '2026-08-08T09:15:00Z' }
     ]);
 
     const [query, params] = db.query.mock.calls[0];
     expect(query).toContain('trade_date >= $2');
     expect(query).toContain('trade_date <= $3');
     expect(query).not.toContain('LIMIT 5000');
-    expect(params).toEqual(['user-1', '2026-03-05', '2026-03-08']);
+    expect(params).toEqual(['user-1', '2026-08-05', '2026-08-08']);
   });
 
   test('Schwab parseTransactions uses intraday time for same-day partial exits', () => {
@@ -658,7 +658,7 @@ describe('broker sync duplicate protection', () => {
         symbol: 'AAPL',
         qty: '5',
         filled_avg_price: '100',
-        filled_at: '2026-03-06T14:30:00Z',
+        filled_at: '2026-08-06T14:30:00Z',
         side: 'buy',
         id: 'buy-1'
       },
@@ -666,7 +666,7 @@ describe('broker sync duplicate protection', () => {
         symbol: 'AAPL',
         qty: '5',
         filled_avg_price: '105',
-        filled_at: '2026-03-06T15:00:00Z',
+        filled_at: '2026-08-06T15:00:00Z',
         side: 'sell',
         id: 'sell-1'
       }
