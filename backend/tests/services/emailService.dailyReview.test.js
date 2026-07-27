@@ -76,22 +76,52 @@ describe('emailService.sendDailyReviewEmail recipients', () => {
     expect(logged).toEqual(['personal@example.com', 'partner@example.com']);
   });
 
-  test('delivers to the remaining recipients when one address fails, then rethrows', async () => {
+  test('a partial failure does not fail the review — the delivered copy still counts', async () => {
+    // The realistic case: an extra recipient the mail provider rejects while
+    // the primary inbox is fine. Throwing here marked the whole account review
+    // failed even though the review had landed.
     emailService.sendMail
       .mockRejectedValueOnce(new Error('invalid recipient'))
       .mockResolvedValueOnce({ messageId: 'mid' });
 
-    await expect(emailService.sendDailyReviewEmail(USER, {
+    const result = await emailService.sendDailyReviewEmail(USER, {
       ...OPTIONS,
       recipients: ['bad@example.com', 'partner@example.com']
-    })).rejects.toThrow('invalid recipient');
+    });
 
+    expect(result).toEqual({ sent: 1, failed: 1 });
     expect(sentAddresses()).toEqual(['bad@example.com', 'partner@example.com']);
 
     const statuses = mockDb.query.mock.calls
       .filter(([sql]) => sql.includes('INSERT INTO email_log'))
       .map(([, params]) => params[5]);
     expect(statuses).toEqual(['failed', 'sent']);
+  });
+
+  test('throws only when every recipient fails', async () => {
+    emailService.sendMail.mockRejectedValue(new Error('mailer down'));
+
+    await expect(emailService.sendDailyReviewEmail(USER, {
+      ...OPTIONS,
+      recipients: ['a@example.com', 'b@example.com']
+    })).rejects.toThrow('mailer down');
+  });
+
+  test('names the account in the subject and body so two reviews are distinguishable', async () => {
+    await emailService.sendDailyReviewEmail(USER, { ...OPTIONS, accountLabel: '****5119' });
+
+    const [opts] = emailService.sendMail.mock.calls[0];
+    expect(opts.subject).toContain('****5119');
+    expect(opts.html).toContain('****5119');
+    expect(opts.text).toContain('****5119');
+  });
+
+  test('omits the account chrome when there is no account', async () => {
+    await emailService.sendDailyReviewEmail(USER, OPTIONS);
+
+    const [opts] = emailService.sendMail.mock.calls[0];
+    expect(opts.subject).toBe(`Daily review - ${OPTIONS.dateLabel}`);
+    expect(opts.html).not.toContain('Account ');
   });
 
   test('skips the send entirely when there is no address at all', async () => {

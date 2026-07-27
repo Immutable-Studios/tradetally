@@ -808,6 +808,7 @@ class EmailService {
       ? `Daily review ${accountLabel} - ${dateLabel}`
       : `Daily review - ${dateLabel}`;
     let firstError = null;
+    let sentCount = 0;
 
     for (const [index, email] of mailTo.entries()) {
       // Unique per recipient: identical Message-IDs get collapsed or dropped as
@@ -827,18 +828,32 @@ class EmailService {
 
       try {
         await this.sendMail(mailOptions);
+        sentCount++;
         console.log('Daily review email sent to', maskEmail(email));
         await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL } });
       } catch (error) {
         // Keep going: one bad address must not cost the other recipients their
-        // review. The first failure is rethrown once every send is attempted.
+        // review.
         console.error('Error sending daily review email to', maskEmail(email), error);
         await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'failed', errorMessage: error.message, userId, metadata: { dateLabel } });
         if (!firstError) firstError = error;
       }
     }
 
-    if (firstError) throw firstError;
+    // Throw only when nobody got it. A partial failure used to propagate, which
+    // marked the whole account review failed even though the review had landed
+    // in the primary inbox — one unverified extra recipient then read as a
+    // total outage every single day. Logged loudly instead; email_log carries
+    // the per-recipient status.
+    if (!sentCount && firstError) throw firstError;
+    if (firstError) {
+      console.warn(
+        `[EMAIL] Daily review partially delivered: ${sentCount}/${mailTo.length} recipients. ` +
+        `First failure: ${firstError.message}`
+      );
+    }
+
+    return { sent: sentCount, failed: mailTo.length - sentCount };
   }
 
   /**
