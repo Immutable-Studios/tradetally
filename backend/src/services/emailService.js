@@ -830,7 +830,7 @@ class EmailService {
         await this.sendMail(mailOptions);
         sentCount++;
         console.log('Daily review email sent to', maskEmail(email));
-        await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL } });
+        await this.logEmail({ recipient: email, subject, emailType: 'daily_review', htmlBody: html, textBody: textSummary, status: 'sent', userId, metadata: { dateLabel, tradeCount, dayPnL, account: accountLabel || null } });
       } catch (error) {
         // Keep going: one bad address must not cost the other recipients their
         // review.

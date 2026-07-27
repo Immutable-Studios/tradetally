@@ -1,23 +1,29 @@
 const mockDb = { query: jest.fn() };
 jest.mock('../../src/config/database', () => mockDb);
 jest.mock('../../src/models/BrokerConnection', () => ({
-  getExcludedAccountIdentifiers: jest.fn().mockResolvedValue([])
+  getExcludedAccountIdentifiers: jest.fn().mockResolvedValue([]),
+  findByUserId: jest.fn().mockResolvedValue([]),
+  findById: jest.fn().mockResolvedValue(null)
 }));
 jest.mock('../../src/services/brokerSync/schwabService', () => ({
   getAccounts: jest.fn(),
   getWorkingStopOrders: jest.fn().mockResolvedValue([]),
   isSchwabAccountExcluded: jest.fn().mockReturnValue(false),
-  getExcludedSchwabAccountLast4s: jest.fn().mockReturnValue([])
+  getExcludedSchwabAccountLast4s: jest.fn().mockReturnValue([]),
+  ensureValidToken: jest.fn().mockResolvedValue({ accessToken: 'tok', needsReauth: false })
 }));
 jest.mock('../../src/utils/timezone', () => ({
   getUserTimezone: jest.fn().mockResolvedValue('America/Los_Angeles'),
   getDateInTimezone: jest.fn()
 }));
 
+const schwabService = require('../../src/services/brokerSync/schwabService');
+const BrokerConnection = require('../../src/models/BrokerConnection');
 const {
   computeTradingDayPl,
   resolveEquityForDay,
-  computeOpenHeat
+  computeOpenHeat,
+  captureAccountSnapshotForDay
 } = require('../../src/services/accountBalanceService');
 
 const USER = 'user-1';
@@ -121,5 +127,106 @@ describe('resolveEquityForDay fallbacks', () => {
     const result = await resolveEquityForDay(USER, '2026-07-27', {});
 
     expect(result.equity).toBe(250000);
+  });
+});
+
+describe('captureAccountSnapshotForDay balances', () => {
+  // The reported bug in miniature: a single-account review showing Net Liq for
+  // every account added together.
+  function schwabAccount(number, netLiq, sodNetLiq) {
+    return {
+      securitiesAccount: {
+        accountNumber: number,
+        type: 'MARGIN',
+        currentBalances: { liquidationValue: netLiq, cashBalance: 0 },
+        initialBalances: { liquidationValue: sodNetLiq, equity: sodNetLiq },
+        positions: []
+      }
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.mockResolvedValue({ rows: [] });
+    BrokerConnection.findByUserId.mockResolvedValue([
+      { id: 'conn-1', brokerType: 'schwab', connectionStatus: 'active' }
+    ]);
+    BrokerConnection.findById.mockResolvedValue({ id: 'conn-1' });
+    schwabService.getAccounts.mockResolvedValue([
+      schwabAccount('12345119', 1030685.22, 1028759.92),
+      schwabAccount('99997790', 169991.59, 171044.78)
+    ]);
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('sums every account when unscoped', async () => {
+    const strip = await captureAccountSnapshotForDay(USER, '2026-07-27', { persistEquity: false });
+
+    expect(strip.netLiq).toBeCloseTo(1200676.81, 2);
+  });
+
+  it('reports only the requested account', async () => {
+    const strip = await captureAccountSnapshotForDay(USER, '2026-07-27', {
+      accountIdentifier: '****5119', persistEquity: false
+    });
+
+    expect(strip.netLiq).toBe(1030685.22);
+    expect(strip.equityForPct).toBe(1028759.92);
+  });
+
+  it('matches an account written without the mask', async () => {
+    const strip = await captureAccountSnapshotForDay(USER, '2026-07-27', {
+      accountIdentifier: '7790', persistEquity: false
+    });
+
+    expect(strip.netLiq).toBe(169991.59);
+  });
+
+  it('returns null when the requested account is not on the payload', async () => {
+    const strip = await captureAccountSnapshotForDay(USER, '2026-07-27', {
+      accountIdentifier: '****0000', persistEquity: false
+    });
+
+    expect(strip).toBeNull();
+  });
+
+  it('skips accounts Schwab has excluded', async () => {
+    schwabService.isSchwabAccountExcluded.mockImplementation((masked) => masked === '****7790');
+
+    const strip = await captureAccountSnapshotForDay(USER, '2026-07-27', { persistEquity: false });
+
+    expect(strip.netLiq).toBe(1030685.22);
+  });
+
+  it('does not write the equity series when persistEquity is false', async () => {
+    await captureAccountSnapshotForDay(USER, '2026-07-27', {
+      accountIdentifier: '****5119', persistEquity: false
+    });
+
+    const writes = mockDb.query.mock.calls.filter(([sql]) =>
+      /INSERT INTO equity_snapshots|UPDATE user_settings/i.test(sql));
+    expect(writes).toHaveLength(0);
+  });
+
+  it('writes the equity series for the unscoped aggregate', async () => {
+    await captureAccountSnapshotForDay(USER, '2026-07-27');
+
+    const writes = mockDb.query.mock.calls.filter(([sql]) =>
+      /equity_snapshots|user_settings/i.test(sql));
+    expect(writes.length).toBeGreaterThan(0);
+  });
+
+  it('returns null when there is no active Schwab connection', async () => {
+    BrokerConnection.findByUserId.mockResolvedValue([]);
+
+    await expect(captureAccountSnapshotForDay(USER, '2026-07-27', { persistEquity: false }))
+      .resolves.toBeNull();
+  });
+
+  it('returns null when the token needs reauth', async () => {
+    schwabService.ensureValidToken.mockResolvedValue({ accessToken: null, needsReauth: true });
+
+    await expect(captureAccountSnapshotForDay(USER, '2026-07-27', { persistEquity: false }))
+      .resolves.toBeNull();
   });
 });

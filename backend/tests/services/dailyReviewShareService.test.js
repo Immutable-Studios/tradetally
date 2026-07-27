@@ -211,6 +211,94 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
     expect(shares[0].account_identifier).toBe('****7790');
   });
 
+  describe('per-account dedupe', () => {
+    // db.query serves both listAccountsForDay and recentlySentAccounts, so the
+    // responses are matched to the query rather than queued in order.
+    function respond({ accounts = [], sent = [] }) {
+      db.query.mockImplementation((sql) => {
+        if (sql.includes('email_log')) {
+          return Promise.resolve({ rows: sent.map(account => ({ account })) });
+        }
+        return Promise.resolve({ rows: accounts.map(a => ({ account_identifier: a })) });
+      });
+    }
+
+    it('skips an account whose review already went out', async () => {
+      respond({ accounts: ['****5119', '****7790'], sent: ['****5119'] });
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: true
+      });
+
+      expect(shares).toHaveLength(1);
+      expect(shares[0].account_identifier).toBe('****7790');
+    });
+
+    it('still sends the account whose earlier attempt failed', async () => {
+      // The bug this replaced: a user-level check saw ****5119 succeed and
+      // skipped the user outright, so ****7790 never got a second chance.
+      respond({ accounts: ['****5119', '****7790'], sent: ['****5119'] });
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: true
+      });
+
+      const labels = EmailService.sendDailyReviewEmail.mock.calls.map(([, o]) => o.accountLabel);
+      expect(labels).toEqual(['****7790']);
+      expect(shares).toHaveLength(1);
+    });
+
+    it('sends nothing when every account is already covered', async () => {
+      respond({ accounts: ['****5119'], sent: ['****5119'] });
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: true
+      });
+
+      expect(shares).toBeNull();
+      expect(EmailService.sendDailyReviewEmail).not.toHaveBeenCalled();
+    });
+
+    it('ignores previous sends when not deduping', async () => {
+      respond({ accounts: ['****5119'], sent: ['****5119'] });
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: false
+      });
+
+      expect(shares).toHaveLength(1);
+    });
+
+    it('matches the all-accounts review on its own sentinel', async () => {
+      respond({ accounts: [], sent: ['__all__'] });
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: true
+      });
+
+      expect(shares).toBeNull();
+    });
+
+    it('sends anyway when the dedupe lookup fails', async () => {
+      // A duplicate email is a smaller problem than a missing one.
+      db.query.mockImplementation((sql) => sql.includes('email_log')
+        ? Promise.reject(new Error('db down'))
+        : Promise.resolve({ rows: [{ account_identifier: '****5119' }] }));
+
+      const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, {
+        shareDate: '2026-07-18',
+        skipIfSentToday: true
+      });
+
+      expect(shares).toHaveLength(1);
+    });
+  });
+
   it('routes the email to the configured recipients for the owner account', async () => {
     process.env.DAILY_REVIEW_OWNER_EMAIL = 'trader@example.com';
     process.env.DAILY_REVIEW_RECIPIENTS = 'personal@example.com, partner@example.com';
@@ -261,22 +349,26 @@ describe('DailyReviewShareService.runDailyBatch', () => {
     expect(BrokerSyncService.syncConnection).toHaveBeenCalledWith('conn-1', { syncType: 'scheduled' });
   });
 
-  it('excludes users already emailed in the last 18 hours by default', async () => {
+  it('selects users without deduping at the user level', async () => {
+    // Deduping here would skip a whole user because one of their accounts had
+    // already sent, stranding any account whose send failed.
     db.query.mockResolvedValue({ rows: [] });
 
     await DailyReviewShareService.runDailyBatch();
 
-    const sql = db.query.mock.calls[0][0];
-    expect(sql).toContain("el.email_type = 'daily_review'");
-    expect(sql).toContain("el.status = 'sent'");
-    expect(sql).toContain("INTERVAL '18 hours'");
+    expect(db.query.mock.calls[0][0]).not.toContain('email_log');
   });
 
-  it('drops the dedupe clause when a re-send is forced', async () => {
-    db.query.mockResolvedValue({ rows: [] });
+  it('passes the dedupe preference down to the per-account send', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: 'u1' }] });
+    const spy = jest.spyOn(DailyReviewShareService, 'generateAndSendForUser').mockResolvedValue([{}]);
+
+    await DailyReviewShareService.runDailyBatch();
+    expect(spy).toHaveBeenCalledWith('u1', expect.objectContaining({ skipIfSentToday: true }));
 
     await DailyReviewShareService.runDailyBatch({ skipIfSentToday: false });
+    expect(spy).toHaveBeenLastCalledWith('u1', expect.objectContaining({ skipIfSentToday: false }));
 
-    expect(db.query.mock.calls[0][0]).not.toContain('email_log');
+    spy.mockRestore();
   });
 });

@@ -22,6 +22,10 @@ const DEFAULT_EXPIRES_DAYS = parseInt(process.env.DAILY_REVIEW_SHARE_EXPIRES_DAY
 // as an `accounts` filter.
 const UNSORTED_ACCOUNT = '__unsorted__';
 
+// Stands in for "no account" when deduping sends, since email_log metadata
+// stores null for an all-accounts review.
+const ALL_ACCOUNTS_KEY = '__all__';
+
 /**
  * Compare account identifiers written in different styles: Schwab stores
  * '****5119' on trades, an operator will typically type '5119'. Masked
@@ -166,6 +170,40 @@ class DailyReviewShareService {
     return accounts.length ? accounts : [null];
   }
 
+  /**
+   * Accounts already emailed a review in the last 18 hours, as label strings
+   * (null accounts appear as ALL_ACCOUNTS_KEY).
+   *
+   * Deduping has to happen per account, not per user. Reviews are sent one per
+   * account, so a user-level check would see the first account's success and
+   * skip the whole user on a retry — leaving an account whose send had failed
+   * with no review at all.
+   *
+   * 18 hours rather than "today": the batch runs mid-afternoon Pacific, which
+   * is already the next UTC day for part of the year, so a calendar-day
+   * comparison would miss its own previous run. Consecutive daily runs are 24h
+   * apart and so are never wrongly skipped.
+   */
+  static async recentlySentAccounts(userId) {
+    try {
+      const result = await db.query(
+        `SELECT DISTINCT COALESCE(metadata->>'account', $2) AS account
+           FROM email_log
+          WHERE user_id = $1
+            AND email_type = 'daily_review'
+            AND status = 'sent'
+            AND sent_at > NOW() - INTERVAL '18 hours'`,
+        [userId, ALL_ACCOUNTS_KEY]
+      );
+      return new Set(result.rows.map(r => r.account));
+    } catch (error) {
+      // A dedupe lookup that fails must not stop the review going out; a
+      // duplicate email is a smaller problem than a missing one.
+      console.warn('[DAILY-REVIEW-SHARE] Recent-send lookup failed:', error.message);
+      return new Set();
+    }
+  }
+
   static async getDayStats(userId, shareDate, accountIdentifier = null) {
     try {
       const analytics = await TradeQueries.getAnalytics(userId, {
@@ -191,7 +229,7 @@ class DailyReviewShareService {
    * returns the share row. Returns null when the send is skipped (email not
    * configured, user has no address, or the user opted out).
    */
-  static async generateAndSendForUser(userId, { shareDate, force = false } = {}) {
+  static async generateAndSendForUser(userId, { shareDate, force = false, skipIfSentToday = false } = {}) {
     if (!EmailService.isConfigured()) {
       console.log('[DAILY-REVIEW-SHARE] Email not configured, skipping');
       return null;
@@ -234,10 +272,17 @@ class DailyReviewShareService {
 
     const accounts = await this.listAccountsForDay(userId, resolvedDate);
     const recipients = resolveDailyReviewRecipients(user);
+    const alreadySent = skipIfSentToday ? await this.recentlySentAccounts(userId) : new Set();
     const shares = [];
     let failed = 0;
+    let skipped = 0;
 
     for (const accountIdentifier of accounts) {
+      if (alreadySent.has(accountIdentifier ? accountLabel(accountIdentifier) : ALL_ACCOUNTS_KEY)) {
+        skipped++;
+        continue;
+      }
+
       try {
         const share = await DailyReviewShare.getOrCreate(userId, resolvedDate, {
           expiresAt,
@@ -287,6 +332,10 @@ class DailyReviewShareService {
       throw new Error(`All ${failed} account review(s) failed for user ${userId}`);
     }
 
+    if (skipped) {
+      console.log(`[DAILY-REVIEW-SHARE] Skipped ${skipped} account(s) already emailed for ${userId}`);
+    }
+
     return shares.length ? shares : null;
   }
 
@@ -296,30 +345,21 @@ class DailyReviewShareService {
    * the run.
    *
    * @param {object} options
-   * @param {boolean} options.skipIfSentToday - Skip users who already got a
-   *   daily review recently. Defaults to true because there are now two
-   *   triggers (the in-process cron and the internal HTTP endpoint) and both
-   *   can fire on the same day; without this the user gets two emails. Pass
+   * @param {boolean} options.skipIfSentToday - Skip accounts that already got
+   *   a review recently. Defaults to true because there are now two triggers
+   *   (the in-process cron and the internal HTTP endpoint) and both can fire
+   *   on the same day; without this the user gets two emails per account. Pass
    *   false to force a re-send.
    */
   static async runDailyBatch({ skipIfSentToday = true } = {}) {
     const stats = { users: 0, sent: 0, skipped: 0, failed: 0, reviews: 0 };
     let users;
     try {
-      // An 18-hour window rather than "today": the batch runs mid-afternoon
-      // Pacific, which is already the next UTC day for part of the year, so a
-      // calendar-day comparison would miss its own previous run. Consecutive
-      // daily runs are 24h apart and so are never wrongly skipped.
-      const dedupeClause = skipIfSentToday
-        ? `AND NOT EXISTS (
-             SELECT 1 FROM email_log el
-             WHERE el.user_id = u.id
-               AND el.email_type = 'daily_review'
-               AND el.status = 'sent'
-               AND el.sent_at > NOW() - INTERVAL '18 hours'
-           )`
-        : '';
-
+      // No dedupe here on purpose. Filtering users out at this level looked
+      // right while a review was one email per user, but sends are per account
+      // now: one account succeeding would skip the whole user on a retry and
+      // an account whose send had failed would never get its review. The
+      // per-account check lives in generateAndSendForUser instead.
       const result = await db.query(`
         SELECT u.id
         FROM users u
@@ -327,7 +367,6 @@ class DailyReviewShareService {
         WHERE u.is_active = true
           AND u.email IS NOT NULL AND u.email != ''
           AND COALESCE(s.daily_review_email_enabled, true) = true
-          ${dedupeClause}
         ORDER BY u.id
       `);
       users = result.rows;
@@ -341,7 +380,7 @@ class DailyReviewShareService {
 
     for (const row of users) {
       try {
-        const shares = await this.generateAndSendForUser(row.id, { force: true });
+        const shares = await this.generateAndSendForUser(row.id, { force: true, skipIfSentToday });
         if (shares && shares.length) {
           // One review per account, so a user can contribute several sends.
           stats.sent++;

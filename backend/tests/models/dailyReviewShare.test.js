@@ -137,6 +137,21 @@ describe('isExpired', () => {
   });
 });
 
+describe('recordView', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.mockResolvedValue({ rows: [] });
+  });
+
+  it('increments the counter and stamps the time', async () => {
+    await DailyReviewShare.recordView('share-1');
+
+    expect(lastCall().sql).toContain('view_count = view_count + 1');
+    expect(lastCall().sql).toContain('last_viewed_at = NOW()');
+    expect(lastCall().params).toEqual(['share-1']);
+  });
+});
+
 describe('updateAccountSnapshot', () => {
   beforeEach(() => {
     jest.clearAllMocks();
