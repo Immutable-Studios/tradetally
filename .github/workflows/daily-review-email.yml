@@ -84,4 +84,14 @@ jobs:
             exit 1
           fi
 
+          # A batch that ran fine but could not deliver still returns 200 with a
+          # failure count. Surface it: a per-recipient send failure (a rejected
+          # address, an unverified sender domain) is exactly the kind of silent
+          # breakage this whole workflow exists to stop.
+          failed=$(python3 -c "import json;print(json.load(open('/tmp/response.json')).get('failed',0))" 2>/dev/null || echo 0)
+          if [ "$failed" != "0" ]; then
+            echo "::error::Daily review batch reported $failed failed user(s) — check the app logs"
+            exit 1
+          fi
+
           echo "Daily review batch completed"
