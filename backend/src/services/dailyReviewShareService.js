@@ -17,6 +17,39 @@ const { resolveDailyReviewRecipients } = require('../utils/dailyReviewRecipients
 
 const DEFAULT_EXPIRES_DAYS = parseInt(process.env.DAILY_REVIEW_SHARE_EXPIRES_DAYS, 10) || 30;
 
+// Sentinel for trades carrying no account identifier. Same value the trade
+// filters use (services/tradeQueries.js), so it can be passed straight through
+// as an `accounts` filter.
+const UNSORTED_ACCOUNT = '__unsorted__';
+
+/**
+ * Compare account identifiers written in different styles: Schwab stores
+ * '****5119' on trades, an operator will typically type '5119'. Masked
+ * identifiers reduce to their digits; anything else (the unsorted sentinel)
+ * compares as lowercase text.
+ */
+function normalizeAccount(value) {
+  const str = String(value || '').trim().toLowerCase();
+  if (!str) return '';
+  const digits = str.replace(/\D/g, '');
+  return digits.length >= 4 ? digits.slice(-4) : str;
+}
+
+/** Operator allowlist of accounts that generate a review. Null = no restriction. */
+function parseAccountAllowlist() {
+  const raw = process.env.DAILY_REVIEW_ACCOUNTS;
+  if (!raw || !String(raw).trim()) return null;
+  const entries = String(raw).split(',').map(s => s.trim()).filter(Boolean);
+  return entries.length ? entries : null;
+}
+
+/** Human-readable account name for email subjects and headings. */
+function accountLabel(accountIdentifier) {
+  if (!accountIdentifier) return null;
+  if (accountIdentifier === UNSORTED_ACCOUNT) return 'Unassigned';
+  return accountIdentifier;
+}
+
 function round2(value) {
   const num = parseFloat(value);
   return Number.isFinite(num) ? Math.round(num * 100) / 100 : null;
@@ -82,11 +115,65 @@ class DailyReviewShareService {
     return `${baseUrl}/daily/share/${token}`;
   }
 
-  static async getDayStats(userId, shareDate) {
+  /**
+   * Accounts to generate a review for, as trades.account_identifier values.
+   *
+   * DAILY_REVIEW_ACCOUNTS, when set, IS the list — an operator allowlist, so a
+   * secondary book (an IRA, a funded-eval account) never generates an email
+   * even on days it trades. Entries may be written '****5119' or '5119'.
+   *
+   * Unset, it is every account with activity on the day or an open position,
+   * minus Schwab-excluded ones. A day with no activity anywhere yields [null],
+   * the all-accounts review, so the user still gets their daily email instead
+   * of silence.
+   */
+  static async listAccountsForDay(userId, shareDate) {
+    const allowlist = parseAccountAllowlist();
+
+    let active = [];
+    try {
+      const result = await db.query(
+        `SELECT DISTINCT COALESCE(NULLIF(account_identifier, ''), $3) AS account_identifier
+           FROM trades
+          WHERE user_id = $1
+            AND (trade_date = $2 OR exit_price IS NULL)`,
+        [userId, shareDate, UNSORTED_ACCOUNT]
+      );
+      active = result.rows.map(r => r.account_identifier).filter(Boolean);
+    } catch (error) {
+      console.error('[DAILY-REVIEW-SHARE] Failed to list accounts:', error.message);
+      return allowlist ? allowlist : [null];
+    }
+
+    if (allowlist) {
+      // Prefer the identifier as it is actually stored on trades, so the share
+      // row and the trade filter agree; fall back to the configured spelling.
+      return allowlist.map(entry =>
+        active.find(a => normalizeAccount(a) === normalizeAccount(entry)) || entry
+      );
+    }
+
+    let excluded = [];
+    try {
+      const BrokerConnection = require('../models/BrokerConnection');
+      excluded = await BrokerConnection.getExcludedAccountIdentifiers(userId);
+    } catch (error) {
+      console.warn('[DAILY-REVIEW-SHARE] Excluded account lookup failed:', error.message);
+    }
+    const excludedSet = new Set(excluded.map(normalizeAccount));
+
+    const accounts = active.filter(a => !excludedSet.has(normalizeAccount(a))).sort();
+    return accounts.length ? accounts : [null];
+  }
+
+  static async getDayStats(userId, shareDate, accountIdentifier = null) {
     try {
       const analytics = await TradeQueries.getAnalytics(userId, {
         startDate: shareDate,
-        endDate: shareDate
+        endDate: shareDate,
+        // A review covering two books reports a day P&L and win rate that
+        // describe neither. Scope every figure to this review's account.
+        ...(accountIdentifier ? { accounts: [accountIdentifier] } : {})
       });
       const summary = analytics?.summary || {};
       return {
@@ -137,32 +224,70 @@ class DailyReviewShareService {
     const resolvedDate = shareDate || await this.getDefaultShareDate(userId);
     const expiresAt = new Date(Date.now() + DEFAULT_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
 
-    const share = await DailyReviewShare.getOrCreate(userId, resolvedDate, { expiresAt });
-
-    // Freeze Schwab account strip on the share so the public page can show
-    // Net Liq / cash / BP and trade "% of equity" without a live broker call.
+    // The user-level equity series has to be written exactly once for the day,
+    // from the aggregate strip. Per-account strips below deliberately skip it.
     try {
-      const strip = await AccountBalanceService.captureAccountSnapshotForDay(userId, resolvedDate);
-      if (strip) {
-        await DailyReviewShare.updateAccountSnapshot(share.id, strip);
-        share.account_snapshot = strip;
-      }
+      await AccountBalanceService.captureAccountSnapshotForDay(userId, resolvedDate);
     } catch (error) {
-      console.warn('[DAILY-REVIEW-SHARE] Account snapshot failed:', error.message);
+      console.warn('[DAILY-REVIEW-SHARE] Aggregate equity snapshot failed:', error.message);
     }
 
-    const shareUrl = this.buildShareUrl(share.token);
-    const { tradeCount, dayPnL } = await this.getDayStats(userId, resolvedDate);
+    const accounts = await this.listAccountsForDay(userId, resolvedDate);
+    const recipients = resolveDailyReviewRecipients(user);
+    const shares = [];
+    let failed = 0;
 
-    await EmailService.sendDailyReviewEmail(user, {
-      dateLabel: formatDateLabel(resolvedDate),
-      shareUrl,
-      tradeCount,
-      dayPnL,
-      recipients: resolveDailyReviewRecipients(user)
-    });
+    for (const accountIdentifier of accounts) {
+      try {
+        const share = await DailyReviewShare.getOrCreate(userId, resolvedDate, {
+          expiresAt,
+          accountIdentifier
+        });
 
-    return share;
+        // Freeze the Schwab account strip on the share so the public page can
+        // show Net Liq / cash / BP and trade "% of equity" without a live
+        // broker call. Scoped to this account; persistEquity stays off so the
+        // per-account figure cannot overwrite the user-level series.
+        try {
+          const strip = await AccountBalanceService.captureAccountSnapshotForDay(userId, resolvedDate, {
+            accountIdentifier,
+            persistEquity: false
+          });
+          if (strip) {
+            await DailyReviewShare.updateAccountSnapshot(share.id, strip);
+            share.account_snapshot = strip;
+          }
+        } catch (error) {
+          console.warn('[DAILY-REVIEW-SHARE] Account snapshot failed:', error.message);
+        }
+
+        const { tradeCount, dayPnL } = await this.getDayStats(userId, resolvedDate, accountIdentifier);
+
+        await EmailService.sendDailyReviewEmail(user, {
+          dateLabel: formatDateLabel(resolvedDate),
+          shareUrl: this.buildShareUrl(share.token),
+          tradeCount,
+          dayPnL,
+          recipients,
+          accountLabel: accountLabel(accountIdentifier)
+        });
+
+        shares.push(share);
+      } catch (error) {
+        // One account's failure must not cost the others their review.
+        failed++;
+        console.error(
+          `[DAILY-REVIEW-SHARE] Failed for account ${accountIdentifier || 'all'}:`,
+          error.message
+        );
+      }
+    }
+
+    if (!shares.length && failed) {
+      throw new Error(`All ${failed} account review(s) failed for user ${userId}`);
+    }
+
+    return shares.length ? shares : null;
   }
 
   /**
@@ -178,7 +303,7 @@ class DailyReviewShareService {
    *   false to force a re-send.
    */
   static async runDailyBatch({ skipIfSentToday = true } = {}) {
-    const stats = { users: 0, sent: 0, skipped: 0, failed: 0 };
+    const stats = { users: 0, sent: 0, skipped: 0, failed: 0, reviews: 0 };
     let users;
     try {
       // An 18-hour window rather than "today": the batch runs mid-afternoon
@@ -216,9 +341,11 @@ class DailyReviewShareService {
 
     for (const row of users) {
       try {
-        const share = await this.generateAndSendForUser(row.id, { force: true });
-        if (share) {
+        const shares = await this.generateAndSendForUser(row.id, { force: true });
+        if (shares && shares.length) {
+          // One review per account, so a user can contribute several sends.
           stats.sent++;
+          stats.reviews += shares.length;
         } else {
           stats.skipped++;
         }
@@ -228,7 +355,7 @@ class DailyReviewShareService {
       }
     }
 
-    console.log(`[DAILY-REVIEW-SHARE] Daily batch complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.failed} failed`);
+    console.log(`[DAILY-REVIEW-SHARE] Daily batch complete: ${stats.sent} user(s) sent (${stats.reviews} account review(s)), ${stats.skipped} skipped, ${stats.failed} failed`);
     return stats;
   }
 }

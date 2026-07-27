@@ -24,6 +24,10 @@ async function resolveDailyShareToken(req, res, next) {
 
     req.user = user;
     req.dailyShare = share;
+    // Null on legacy shares minted before reviews were split per account —
+    // those stay all-accounts rather than silently changing what an already
+    // emailed link shows.
+    req.dailyShareAccount = share.account_identifier || null;
     // share_date comes back from pg as a Date at UTC midnight - normalize to
     // a plain YYYY-MM-DD string for query params.
     req.dailyShareDate = share.share_date instanceof Date
@@ -50,11 +54,30 @@ function setQuery(req, patch) {
 }
 
 /**
+ * The account filter every share-scoped query must carry. A share belongs to
+ * one account, so its page must never surface another account's trades — the
+ * whole point of splitting reviews per account. Legacy (null-account) shares
+ * get no filter and stay all-accounts.
+ */
+function shareAccountFilter(req) {
+  return req.dailyShareAccount ? { accounts: req.dailyShareAccount } : {};
+}
+
+/**
  * Locks req.query.date to the share's day, ignoring anything the caller
  * passed, before delegating to analyticsController.getCalendarDayDetail.
  */
 function forceShareDay(req, res, next) {
-  setQuery(req, { date: req.dailyShareDate });
+  setQuery(req, { date: req.dailyShareDate, ...shareAccountFilter(req) });
+  next();
+}
+
+/**
+ * Locks the open-positions view to the share's account. Not date-scoped: the
+ * page intentionally shows the live open book as context.
+ */
+function forceShareAccount(req, res, next) {
+  setQuery(req, shareAccountFilter(req));
   next();
 }
 
@@ -67,7 +90,8 @@ function forceShareDateRange(req, res, next) {
   setQuery(req, {
     startDate: req.dailyShareDate,
     endDate: req.dailyShareDate,
-    limit: req.query?.limit || '200'
+    limit: req.query?.limit || '200',
+    ...shareAccountFilter(req)
   });
   next();
 }
@@ -75,5 +99,6 @@ function forceShareDateRange(req, res, next) {
 module.exports = {
   resolveDailyShareToken,
   forceShareDay,
-  forceShareDateRange
+  forceShareDateRange,
+  forceShareAccount
 };

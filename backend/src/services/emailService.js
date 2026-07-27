@@ -737,7 +737,7 @@ class EmailService {
    * @param {object} options - { dateLabel, shareUrl, tradeCount, dayPnL, recipients }
    *   recipients: optional address list replacing the user's own email
    */
-  static async sendDailyReviewEmail(user, { dateLabel, shareUrl, tradeCount = 0, dayPnL = null, recipients = null }) {
+  static async sendDailyReviewEmail(user, { dateLabel, shareUrl, tradeCount = 0, dayPnL = null, recipients = null, accountLabel = null }) {
     if (!this.isConfigured()) {
       console.log('Email not configured, skipping daily review email');
       return;
@@ -760,12 +760,22 @@ class EmailService {
     const pnlFormatted = hasPnl ? `${Number(dayPnL) < 0 ? '-' : ''}$${Math.abs(Number(dayPnL)).toFixed(2)}` : null;
     const pnlColor = hasPnl && Number(dayPnL) >= 0 ? '#16a34a' : '#dc2626';
 
+    // Reviews are per account, so the account has to be on the email itself —
+    // two of these land the same afternoon and they must not look interchangeable.
+    const safeAccountLabel = accountLabel ? escapeHtml(accountLabel) : null;
+
     const content = `
       <h1 style="color: #18181b; font-size: 22px; margin: 0 0 8px 0; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
         Your daily review is ready
       </h1>
+      ${safeAccountLabel ? `
+      <p style="margin: 0 0 8px 0;">
+        <span style="display: inline-block; background-color: #f4f4f5; color: #52525b; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; padding: 4px 10px; border-radius: 999px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+          Account ${safeAccountLabel}
+        </span>
+      </p>` : ''}
       <p style="color: #71717a; font-size: 15px; line-height: 1.6; margin: 0 0 24px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-        Here's what happened on ${safeDateLabel}.
+        Here's what happened on ${safeDateLabel}${safeAccountLabel ? ` in account ${safeAccountLabel}` : ''}.
       </p>
 
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 28px 0;">
@@ -790,10 +800,13 @@ class EmailService {
       </p>
     `;
 
-    const html = this.getBaseTemplate(`Daily Review - ${dateLabel}`, content);
-    const textSummary = `Your daily review for ${dateLabel} is ready. ${tradeCount} trade${tradeCount === 1 ? '' : 's'}${hasPnl ? `, day P&L ${pnlFormatted}` : ''}. View it here (no login required): ${shareUrl}`;
+    const accountSuffix = accountLabel ? ` (${accountLabel})` : '';
+    const html = this.getBaseTemplate(`Daily Review${accountSuffix} - ${dateLabel}`, content);
+    const textSummary = `Your daily review for ${dateLabel}${accountLabel ? ` (account ${accountLabel})` : ''} is ready. ${tradeCount} trade${tradeCount === 1 ? '' : 's'}${hasPnl ? `, day P&L ${pnlFormatted}` : ''}. View it here (no login required): ${shareUrl}`;
 
-    const subject = `Daily review - ${dateLabel}`;
+    const subject = accountLabel
+      ? `Daily review ${accountLabel} - ${dateLabel}`
+      : `Daily review - ${dateLabel}`;
     let firstError = null;
 
     for (const [index, email] of mailTo.entries()) {

@@ -6,7 +6,8 @@ const tradeController = require('../controllers/trade.controller');
 const {
   resolveDailyShareToken,
   forceShareDay,
-  forceShareDateRange
+  forceShareDateRange,
+  forceShareAccount
 } = require('../middleware/dailyShareAuth');
 
 /**
@@ -27,7 +28,7 @@ router.get('/:token/day', resolveDailyShareToken, forceShareDay, analyticsContro
 
 router.get('/:token/trades', resolveDailyShareToken, forceShareDateRange, tradeController.getUserTrades);
 
-router.get('/:token/positions', resolveDailyShareToken, tradeController.getOpenPositionsWithQuotes);
+router.get('/:token/positions', resolveDailyShareToken, forceShareAccount, tradeController.getOpenPositionsWithQuotes);
 
 // Chart data for a trade owned by the share's user. Reuses getTradeChartData
 // (ownership-scoped via req.user.id) so shared Daily Review pages can show

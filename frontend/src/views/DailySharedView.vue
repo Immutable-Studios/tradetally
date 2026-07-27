@@ -9,6 +9,9 @@
         {{ headingLabel }}
       </h1>
       <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+        <!-- Naming the account matters: one review per account means several
+             of these links can arrive the same afternoon. -->
+        <span v-if="account" class="font-medium text-gray-700 dark:text-gray-300">Account {{ account }} · </span>
         Read-only session review — bold P&amp;L, open durations, and padded charts.
       </p>
     </div>
@@ -127,6 +130,7 @@ const {
   notFound,
   errorMessage,
   dateKey,
+  account,
   accountStrip,
   equityForPct,
   contributions,

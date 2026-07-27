@@ -6,7 +6,11 @@ jest.mock('../../src/models/User', () => ({
   getSettings: jest.fn()
 }));
 jest.mock('../../src/models/DailyReviewShare', () => ({
-  getOrCreate: jest.fn()
+  getOrCreate: jest.fn(),
+  updateAccountSnapshot: jest.fn()
+}));
+jest.mock('../../src/services/accountBalanceService', () => ({
+  captureAccountSnapshotForDay: jest.fn().mockResolvedValue(null)
 }));
 jest.mock('../../src/services/emailService', () => ({
   isConfigured: jest.fn(),
@@ -16,7 +20,8 @@ jest.mock('../../src/services/tradeQueries', () => ({
   getAnalytics: jest.fn()
 }));
 jest.mock('../../src/models/BrokerConnection', () => ({
-  findByUserId: jest.fn().mockResolvedValue([])
+  findByUserId: jest.fn().mockResolvedValue([]),
+  getExcludedAccountIdentifiers: jest.fn().mockResolvedValue([])
 }));
 jest.mock('../../src/services/brokerSync', () => ({
   syncConnection: jest.fn().mockResolvedValue({ imported: 0, duplicates: 0 })
@@ -29,6 +34,7 @@ const EmailService = require('../../src/services/emailService');
 const TradeQueries = require('../../src/services/tradeQueries');
 const BrokerConnection = require('../../src/models/BrokerConnection');
 const BrokerSyncService = require('../../src/services/brokerSync');
+const AccountBalanceService = require('../../src/services/accountBalanceService');
 const DailyReviewShareService = require('../../src/services/dailyReviewShareService');
 
 const USER_ID = 'user-1';
@@ -49,16 +55,24 @@ function mockAnalytics(totalTrades = 0, totalPnL = 0) {
 describe('DailyReviewShareService.generateAndSendForUser', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.DAILY_REVIEW_ACCOUNTS;
     EmailService.isConfigured.mockReturnValue(true);
     User.findById.mockResolvedValue(mockUser());
     User.getSettings.mockResolvedValue({});
     TradeQueries.getAnalytics.mockResolvedValue(mockAnalytics(3, 125.5));
-    DailyReviewShare.getOrCreate.mockResolvedValue({
-      id: 'share-1',
-      token: 'abc123',
-      user_id: USER_ID,
-      share_date: '2026-07-18'
-    });
+    // No per-account activity -> the single all-accounts review.
+    db.query.mockResolvedValue({ rows: [] });
+    DailyReviewShare.getOrCreate.mockImplementation((userId, shareDate, opts = {}) => Promise.resolve({
+      id: `share-${opts.accountIdentifier || 'all'}`,
+      token: opts.accountIdentifier ? `tok-${opts.accountIdentifier}` : 'abc123',
+      user_id: userId,
+      share_date: shareDate,
+      account_identifier: opts.accountIdentifier || null
+    }));
+  });
+
+  afterAll(() => {
+    delete process.env.DAILY_REVIEW_ACCOUNTS;
   });
 
   it('skips when email is not configured', async () => {
@@ -110,9 +124,10 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
   });
 
   it('creates/reuses the share token and emails a link with day stats', async () => {
-    const share = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+    const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
 
-    expect(share.token).toBe('abc123');
+    expect(shares).toHaveLength(1);
+    expect(shares[0].token).toBe('abc123');
     expect(DailyReviewShare.getOrCreate).toHaveBeenCalledWith(
       USER_ID,
       '2026-07-18',
@@ -126,6 +141,74 @@ describe('DailyReviewShareService.generateAndSendForUser', () => {
     expect(options.tradeCount).toBe(3);
     expect(options.dayPnL).toBe(125.5);
     expect(options.recipients).toEqual(['trader@example.com']);
+  });
+
+  it('creates one review per account with activity, each scoped to its own book', async () => {
+    db.query.mockResolvedValue({
+      rows: [{ account_identifier: '****5119' }, { account_identifier: '****7790' }]
+    });
+
+    const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+
+    expect(shares).toHaveLength(2);
+    expect(shares.map(s => s.account_identifier)).toEqual(['****5119', '****7790']);
+
+    // Each review's stats query is filtered to that one account — this is the
+    // mixing bug the split exists to fix.
+    expect(TradeQueries.getAnalytics).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ accounts: ['****5119'] }));
+    expect(TradeQueries.getAnalytics).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ accounts: ['****7790'] }));
+
+    const labels = EmailService.sendDailyReviewEmail.mock.calls.map(([, o]) => o.accountLabel);
+    expect(labels).toEqual(['****5119', '****7790']);
+
+    // Distinct share links, so the two emails cannot show the same page.
+    expect(new Set(EmailService.sendDailyReviewEmail.mock.calls.map(([, o]) => o.shareUrl)).size).toBe(2);
+  });
+
+  it('emails only the allowlisted account when DAILY_REVIEW_ACCOUNTS is set', async () => {
+    process.env.DAILY_REVIEW_ACCOUNTS = '5119';
+    db.query.mockResolvedValue({
+      rows: [{ account_identifier: '****5119' }, { account_identifier: '****7790' }]
+    });
+
+    const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+
+    expect(shares).toHaveLength(1);
+    // Configured as '5119', stored on trades as '****5119' — the review has to
+    // use the stored spelling or its account filter would match nothing.
+    expect(shares[0].account_identifier).toBe('****5119');
+    expect(EmailService.sendDailyReviewEmail).toHaveBeenCalledTimes(1);
+    expect(TradeQueries.getAnalytics).not.toHaveBeenCalledWith(
+      USER_ID, expect.objectContaining({ accounts: ['****7790'] })
+    );
+  });
+
+  it('keeps the per-account strip out of the user-level equity series', async () => {
+    db.query.mockResolvedValue({ rows: [{ account_identifier: '****5119' }] });
+
+    await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+
+    const calls = AccountBalanceService.captureAccountSnapshotForDay.mock.calls;
+    // Exactly one aggregate call may persist; every account-scoped call must not.
+    expect(calls.some(([, , opts]) => opts === undefined || opts?.persistEquity !== false)).toBe(true);
+    for (const [, , opts] of calls) {
+      if (opts?.accountIdentifier) expect(opts.persistEquity).toBe(false);
+    }
+  });
+
+  it('still sends the remaining accounts when one fails', async () => {
+    db.query.mockResolvedValue({
+      rows: [{ account_identifier: '****5119' }, { account_identifier: '****7790' }]
+    });
+    DailyReviewShare.getOrCreate.mockImplementation((userId, shareDate, opts = {}) => {
+      if (opts.accountIdentifier === '****5119') throw new Error('share failed');
+      return Promise.resolve({ id: 'share-2', token: 'tok-2', account_identifier: opts.accountIdentifier });
+    });
+
+    const shares = await DailyReviewShareService.generateAndSendForUser(USER_ID, { shareDate: '2026-07-18' });
+
+    expect(shares).toHaveLength(1);
+    expect(shares[0].account_identifier).toBe('****7790');
   });
 
   it('routes the email to the configured recipients for the owner account', async () => {

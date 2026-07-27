@@ -14,6 +14,8 @@ export function useSharedDailyReview(token) {
   const errorMessage = ref(null)
 
   const dateKey = ref(null)
+  // Reviews are per account; null only on legacy all-accounts share links.
+  const account = ref(null)
   const username = ref(null)
   const accountStrip = ref(null)
   const equityForPct = ref(null)
@@ -53,6 +55,7 @@ export function useSharedDailyReview(token) {
   async function fetchMeta() {
     const res = await api.get(`/public/daily-review/${token}`)
     dateKey.value = res.data.date
+    account.value = res.data.account || null
     username.value = res.data.username
     accountStrip.value = res.data.accountStrip || null
     equityForPct.value = res.data.equityForPct
@@ -125,6 +128,7 @@ export function useSharedDailyReview(token) {
     notFound,
     errorMessage,
     dateKey,
+    account,
     username,
     accountStrip,
     equityForPct,

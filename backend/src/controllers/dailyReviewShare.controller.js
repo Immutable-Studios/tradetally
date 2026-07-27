@@ -38,7 +38,13 @@ module.exports = {
 
       if (dailyShareDate === today) {
         try {
-          const live = await AccountBalanceService.captureAccountSnapshotForDay(userId, dailyShareDate);
+          // Scoped to this share's account, and never persisting: the
+          // user-level equity series is written once by the batch from the
+          // aggregate, so a share view must not stamp one account over it.
+          const live = await AccountBalanceService.captureAccountSnapshotForDay(userId, dailyShareDate, {
+            accountIdentifier: req.dailyShareAccount || null,
+            persistEquity: false
+          });
           if (live) {
             accountStrip = live;
             await DailyReviewShare.updateAccountSnapshot(dailyShare.id, live);
@@ -50,6 +56,8 @@ module.exports = {
 
       res.json({
         date: dailyShareDate,
+        // Null on legacy all-accounts shares; the frontend hides the label then.
+        account: req.dailyShareAccount === '__unsorted__' ? 'Unassigned' : (req.dailyShareAccount || null),
         username: user.username || user.full_name || null,
         expiresAt: dailyShare.expires_at,
         createdAt: dailyShare.created_at,

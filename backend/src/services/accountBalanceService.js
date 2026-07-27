@@ -250,7 +250,7 @@ async function computeTradingDayPl(userId, shareDate, {
  * @param {string} userId
  * @param {{ shareDate?: string }} [options] - YYYY-MM-DD for P/L Day; defaults to today UTC date
  */
-async function fetchSchwabAccountStrip(userId, { shareDate } = {}) {
+async function fetchSchwabAccountStrip(userId, { shareDate, accountIdentifier = null } = {}) {
   const connections = await BrokerConnection.findByUserId(userId);
   const summary = connections.find(
     (c) => c.brokerType === 'schwab' && c.connectionStatus === 'active'
@@ -272,10 +272,16 @@ async function fetchSchwabAccountStrip(userId, { shareDate } = {}) {
   const excluded = schwabService.getExcludedSchwabAccountLast4s(schwabConn);
   const parsed = [];
 
+  // Per-account reviews need this account's balances alone. Summing every
+  // account would put the other book's Net Liq behind this review's
+  // "% of equity" figures, which is the mixing the split exists to stop.
+  const wantedLast4 = accountIdentifier ? String(accountIdentifier).replace(/\D/g, '').slice(-4) : null;
+
   for (const row of payload || []) {
     const account = parseSchwabAccount(row);
     if (!account.account) continue;
     if (schwabService.isSchwabAccountExcluded(account.account, excluded)) continue;
+    if (wantedLast4 && String(account.account).replace(/\D/g, '').slice(-4) !== wantedLast4) continue;
     parsed.push(account);
   }
 
@@ -607,11 +613,22 @@ async function computeOpenHeat(userId, {
 /**
  * Capture live Schwab strip for a share day and persist it.
  */
-async function captureAccountSnapshotForDay(userId, shareDate) {
-  const strip = await fetchSchwabAccountStrip(userId, { shareDate });
+/**
+ * @param {object} options
+ * @param {string|null} options.accountIdentifier - restrict the strip to one
+ *   account (per-account Daily Review). Null sums every non-excluded account.
+ * @param {boolean} options.persistEquity - write the day's equity into
+ *   equity_snapshots. Must stay false for per-account strips: that series is
+ *   user-level, so writing each account's Net Liq in turn would leave it
+ *   holding whichever account happened to be captured last.
+ */
+async function captureAccountSnapshotForDay(userId, shareDate, { accountIdentifier = null, persistEquity = true } = {}) {
+  const strip = await fetchSchwabAccountStrip(userId, { shareDate, accountIdentifier });
   if (!strip) return null;
 
-  await persistEquitySnapshot(userId, shareDate, strip.equityForPct ?? strip.netLiq);
+  if (persistEquity) {
+    await persistEquitySnapshot(userId, shareDate, strip.equityForPct ?? strip.netLiq);
+  }
   return strip;
 }
 
