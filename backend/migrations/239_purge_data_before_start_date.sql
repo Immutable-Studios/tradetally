@@ -22,6 +22,30 @@
 -- executes raw SQL with no bind parameters. It must stay equal to
 -- DATA_START_DATE in backend/src/utils/dataStartDate.js.
 
+-- 0. Serialize against concurrent writers before touching anything.
+--
+-- Railway keeps the previous container serving while the new one boots, so the
+-- OLD instance's broker sync is still inserting trades (and the round-trip /
+-- position-group rows that hang off them) while this migration runs. The two
+-- transactions then grab row locks in opposite orders and Postgres kills one
+-- with "deadlock detected" — which is exactly how the first attempt at this
+-- migration died, 19 seconds in, rolling the whole thing back.
+--
+-- Taking the table locks up front makes those writers queue behind us instead.
+-- `trades` is locked first because any sync transaction touches it first too,
+-- so the acquisition order matches and there is no cycle to detect.
+--
+-- lock_timeout is a boot safety valve: if something really is holding trades
+-- for minutes, fail fast and let the next deploy retry rather than hanging
+-- startup until the health check gives up. LOCAL scopes it to this
+-- transaction, so the runner's connection is unaffected afterwards. It is a
+-- USERSET parameter, so this works without superuser.
+SET LOCAL lock_timeout = '120s';
+
+LOCK TABLE trades IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE round_trip_trades IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE trade_position_groups IN ACCESS EXCLUSIVE MODE;
+
 -- 1. Trades. FK cascades take trade_attachments, trade_comments, trade_charts,
 --    trade_dividends, trade_hold_patterns, trade_playbook_reviews,
 --    trade_split_adjustments, personality_trade_analysis,
