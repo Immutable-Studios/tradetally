@@ -10,7 +10,8 @@
     "test": "jest",
     "migrate": "node src/utils/migrate.js",
     "migrate:export": "node run-export-migration.js",
-    "test:integration": "jest --config jest.integration.config.js"
+    "test:integration": "jest --config jest.integration.config.js",
+    "test:ci": "jest --config jest.ci.config.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

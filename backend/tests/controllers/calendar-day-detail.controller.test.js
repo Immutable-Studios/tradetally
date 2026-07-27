@@ -6,6 +6,16 @@ jest.mock('../../src/models/Trade', () => ({
   calculateRiskAmount: jest.fn(() => 123.45)
 }));
 
+// The filter builder consults excluded Schwab accounts, and the equity
+// resolver consults broker connections. Both hit the database, which pushed
+// every queued db.query response one slot out of alignment and left the day
+// query reading `undefined.rows`. Stubbing them keeps the queue below in step
+// with the two queries these tests actually care about.
+jest.mock('../../src/models/BrokerConnection', () => ({
+  getExcludedAccountIdentifiers: jest.fn().mockResolvedValue([]),
+  findByUserId: jest.fn().mockResolvedValue([])
+}));
+
 const db = require('../../src/config/database');
 const Trade = require('../../src/models/Trade');
 const analyticsController = require('../../src/controllers/analytics.controller');
@@ -21,6 +31,9 @@ describe('analyticsController.getCalendarDayDetail', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     db.query.mockReset();
+    // Anything beyond the explicitly queued responses (equity snapshot lookups,
+    // user settings) resolves empty rather than undefined.
+    db.query.mockResolvedValue({ rows: [] });
     Trade.calculateRiskAmount.mockReturnValue(123.45);
     // Calendar endpoints look up the user's timezone before issuing the data
     // query, so each test starts with a UTC timezone response queued up.
@@ -87,6 +100,55 @@ describe('analyticsController.getCalendarDayDetail', () => {
       is_partial: false
     }));
     expect(payload.contributions[0].pnl).toBeCloseTo(333.18, 2);
+  });
+
+  describe('account scoping', () => {
+    // The strip drives the Net Liq header AND equityForPct, which propagates
+    // into every trade's "% of equity". Resolving it for the whole user made a
+    // single-account daily review report both books totalled.
+    const AccountBalanceService = require('../../src/services/accountBalanceService');
+
+    function dayRequest(query) {
+      db.query.mockResolvedValueOnce({ rows: [] });
+      return { query: { date: '2026-04-03', ...query }, user: { id: 'user-1' } };
+    }
+
+    beforeEach(() => {
+      jest.spyOn(AccountBalanceService, 'resolveEquityForDay')
+        .mockResolvedValue({ equity: 1000, strip: { netLiq: 1000 } });
+      jest.spyOn(AccountBalanceService, 'captureAccountSnapshotForDay')
+        .mockResolvedValue(null);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('scopes the strip to a single requested account', async () => {
+      await analyticsController.getCalendarDayDetail(dayRequest({ accounts: '****5119' }), createRes(), jest.fn());
+
+      expect(AccountBalanceService.resolveEquityForDay).toHaveBeenCalledWith(
+        'user-1', '2026-04-03', expect.objectContaining({ accountIdentifier: '****5119' })
+      );
+    });
+
+    test('leaves the strip unscoped when no account is requested', async () => {
+      await analyticsController.getCalendarDayDetail(dayRequest({}), createRes(), jest.fn());
+
+      expect(AccountBalanceService.resolveEquityForDay).toHaveBeenCalledWith(
+        'user-1', '2026-04-03', expect.objectContaining({ accountIdentifier: null })
+      );
+    });
+
+    test('leaves the strip unscoped for a multi-account filter, which has no single strip', async () => {
+      await analyticsController.getCalendarDayDetail(
+        dayRequest({ accounts: '****5119,****7790' }), createRes(), jest.fn()
+      );
+
+      expect(AccountBalanceService.resolveEquityForDay).toHaveBeenCalledWith(
+        'user-1', '2026-04-03', expect.objectContaining({ accountIdentifier: null })
+      );
+    });
   });
 
   test('keeps partial exits split by day when executions span multiple dates', async () => {
@@ -300,6 +362,9 @@ describe('analyticsController.getCalendarData', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     db.query.mockReset();
+    // Anything beyond the explicitly queued responses (equity snapshot lookups,
+    // user settings) resolves empty rather than undefined.
+    db.query.mockResolvedValue({ rows: [] });
     Trade.calculateRiskAmount.mockReturnValue(123.45);
     // Calendar endpoints look up the user's timezone before issuing the data
     // query, so each test starts with a UTC timezone response queued up.

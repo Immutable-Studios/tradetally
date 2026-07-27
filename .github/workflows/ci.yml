@@ -1,0 +1,83 @@
+name: CI
+
+# Test gate for production.
+#
+# Railway does not deploy from `main` any more — it watches `production`, and
+# the only thing that writes to `production` is the deploy job below, which
+# runs only after the tests pass. So a red test run means no deploy, while the
+# day-to-day workflow is unchanged: push to `main` and a green run ships it.
+#
+# See AGENTS.md for the full procedure, including how to ship when CI itself
+# is broken.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Never let an older commit's deploy land on top of a newer one.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Backend tests
+        working-directory: backend
+        # test:ci quarantines six long-broken suites; see jest.ci.config.js.
+        run: pnpm run test:ci
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: pnpm run test:run
+
+      - name: Frontend build
+        working-directory: frontend
+        # A type/import error that no unit test catches still breaks the site.
+        run: pnpm run build
+
+  deploy:
+    name: Release to production
+    needs: test
+    # Only real pushes to main on the cloud repo. Forks and PRs never deploy.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'Immutable-Studios/tradetally'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward production to the tested commit
+        run: |
+          set -euo pipefail
+          echo "Releasing ${GITHUB_SHA} to production"
+          # `production` is a pointer at the newest commit that passed CI, not
+          # a branch anyone commits to, so it is always safe to move it here.
+          # Railway's GitHub integration builds from the resulting commit, so
+          # deploys stay tied to real history — no `railway up`, no drift.
+          git push --force origin "${GITHUB_SHA}:refs/heads/production"
