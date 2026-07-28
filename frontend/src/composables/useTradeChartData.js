@@ -14,14 +14,22 @@ const INTERVAL_TO_RESOLUTION = {
  * (e.g. the Daily Review page). Talks to the same `/trades/:id/chart-data`
  * endpoint used by TradeChartVisualization, without the click-to-load gate
  * or session-persisted resolution since previews always auto-load.
+ *
+ * @param {string} defaultResolution
+ * @param {{ chartUrlForTrade?: (tradeId: string) => string }} [options]
+ *   When `chartUrlForTrade` is set (shared Daily Review pages), chart requests
+ *   go to that public URL instead of the authenticated `/trades/:id/chart-data`.
  */
-export function useTradeChartData(defaultResolution = '5') {
+export function useTradeChartData(defaultResolution = '5', options = {}) {
   const loading = ref(false)
   const error = ref(null)
   const requiresPro = ref(false)
   const isConfigured = ref(true)
   const chartData = ref(null)
   const selectedResolution = ref(defaultResolution)
+  const chartUrlForTrade = typeof options.chartUrlForTrade === 'function'
+    ? options.chartUrlForTrade
+    : null
 
   async function fetchChartData(tradeId, resolution = selectedResolution.value) {
     if (!tradeId) return null
@@ -32,8 +40,13 @@ export function useTradeChartData(defaultResolution = '5') {
     isConfigured.value = true
 
     try {
-      const response = await api.get(`/trades/${tradeId}/chart-data`, {
-        params: { resolution }
+      const url = chartUrlForTrade
+        ? chartUrlForTrade(tradeId)
+        : `/trades/${tradeId}/chart-data`
+      const response = await api.get(url, {
+        params: { resolution },
+        // Public share pages must not bounce guests to /login on a 401.
+        skipAuthRedirect: Boolean(chartUrlForTrade)
       })
       chartData.value = response.data
       selectedResolution.value = INTERVAL_TO_RESOLUTION[response.data?.interval] || resolution
