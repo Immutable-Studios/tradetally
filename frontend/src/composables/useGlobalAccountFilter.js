@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useAccountsStore } from '@/stores/accounts'
+import { useAuthStore } from '@/stores/auth'
 
 export const STORAGE_KEY = 'tradetally_global_account'
 
@@ -127,10 +128,23 @@ export function useGlobalAccountFilter() {
     return response.data.data || []
   }
 
+  function resolveMentorOwnerLabel() {
+    try {
+      const authStore = useAuthStore()
+      if (!authStore.isMentor) return null
+      return authStore.menteeDisplayName || null
+    } catch (_) {
+      return null
+    }
+  }
+
   async function fetchAccounts(options = {}) {
     if (loading.value) return
     const force = options.force === true
     const mentorOnlyShared = options.mentorOnlyShared === true
+    const mentorOwnerLabel = mentorOnlyShared
+      ? (options.ownerLabel || resolveMentorOwnerLabel())
+      : null
     loading.value = true
     try {
       const [tradeAccountsResult, managedAccountsResult] = await Promise.allSettled([
@@ -179,13 +193,28 @@ export function useGlobalAccountFilter() {
       accounts.value = accountIdentifiers.map(identifier => {
         const managedAccount = managedAccountMap.get(identifier)
         const redactedIdentifier = redactAccountId(identifier)
+        const nickname = managedAccount?.accountName
+        const hasNickname = Boolean(nickname && nickname !== identifier)
+
+        if (mentorOwnerLabel) {
+          const primary = hasNickname
+            ? `${mentorOwnerLabel} · ${nickname}`
+            : `${mentorOwnerLabel} · ${redactedIdentifier || identifier}`
+          return {
+            value: identifier,
+            label: primary,
+            secondaryLabel: hasNickname ? (redactedIdentifier || identifier) : null,
+            isPrimary: Boolean(managedAccount?.isPrimary),
+            sharedWithMentors: Boolean(
+              managedAccount && managedAccount.sharedWithMentors !== false
+            )
+          }
+        }
 
         return {
           value: identifier,
-          label: managedAccount?.accountName || redactedIdentifier || identifier,
-          secondaryLabel: managedAccount?.accountName && managedAccount.accountName !== identifier
-            ? redactedIdentifier
-            : null,
+          label: nickname || redactedIdentifier || identifier,
+          secondaryLabel: hasNickname ? redactedIdentifier : null,
           isPrimary: Boolean(managedAccount?.isPrimary),
           // Badge only for managed accounts explicitly shared with mentors.
           // Unmanaged trade identifiers remain mentor-visible but unlabeled.

@@ -1,15 +1,58 @@
 <template>
     <div class="content-wrapper py-8">
         <div class="mb-8">
-            <h1 class="heading-page">Profile</h1>
+            <h1 class="heading-page">{{ authStore.isMentor ? 'Mentor session' : 'Profile' }}</h1>
             <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                Manage your profile information, security, and trading
-                preferences.
+                <template v-if="authStore.isMentor">
+                    You are signed in as a mentor. Account security and profile edits for the mentee stay locked.
+                </template>
+                <template v-else>
+                    Manage your profile information, security, and trading
+                    preferences.
+                </template>
             </p>
         </div>
 
+        <div
+            v-if="authStore.isMentor"
+            class="mb-8 card border-sky-200 dark:border-sky-900"
+        >
+            <div class="card-body space-y-4">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                        Signed in as
+                    </p>
+                    <p class="mt-1 text-base font-semibold text-gray-900 dark:text-white">
+                        {{ authStore.sessionDisplayName }}
+                    </p>
+                    <p v-if="authStore.sessionEmail" class="text-sm text-gray-600 dark:text-gray-400">
+                        {{ authStore.sessionEmail }}
+                    </p>
+                </div>
+                <div class="border-t border-sky-100 pt-4 dark:border-sky-900/60">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                        Viewing journal
+                    </p>
+                    <p class="mt-1 text-base font-semibold text-gray-900 dark:text-white">
+                        {{ authStore.menteeDisplayName || 'Mentee' }}
+                    </p>
+                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                        Comments and diary notes you add are attributed to your mentor login.
+                        Logout ends this mentor session — it does not change the mentee's account.
+                    </p>
+                </div>
+                <div class="flex flex-wrap gap-3 pt-1">
+                    <router-link to="/daily" class="btn-primary">Open daily review</router-link>
+                    <router-link to="/trades" class="btn-secondary">Review trades</router-link>
+                    <button type="button" class="btn-outline" @click="authStore.logout()">
+                        Log out
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Tabs -->
-        <div class="border-b border-gray-200 dark:border-gray-700 mb-8">
+        <div v-if="!authStore.isMentor" class="border-b border-gray-200 dark:border-gray-700 mb-8">
             <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Profile sections">
                 <button
                     v-for="tab in [
@@ -32,7 +75,7 @@
             </nav>
         </div>
 
-        <div class="space-y-8">
+        <div v-if="!authStore.isMentor" class="space-y-8">
             <!-- Profile Picture -->
             <div v-if="activeTab === 'profile'" class="card">
                 <div class="card-body">

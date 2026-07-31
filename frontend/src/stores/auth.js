@@ -42,19 +42,85 @@ export const useAuthStore = defineStore('auth', () => {
   const isMentor = computed(() => Boolean(mentorAccess.value?.isMentor))
   const canChangeImportSettings = computed(() => !isMentor.value)
   const showOnboardingModal = computed(() => {
-    if (!user.value) return false
+    // Mentors inherit the owner's journal user payload — never run owner onboarding for them.
+    if (!user.value || isMentor.value) return false
     return pendingOnboarding.value || !user.value.onboarding_completed
   })
 
   // Step-based onboarding (0 = not started, 1-5 = in progress, 6 = completed)
   const onboardingStep = computed(() => {
-    if (!user.value) return 0
+    if (!user.value || isMentor.value) return 6
     return user.value.onboarding_step || 0
   })
 
   const proOnboardingStep = computed(() => {
-    if (!user.value) return 0
+    if (!user.value || isMentor.value) return 4
     return user.value.pro_onboarding_step || 0
+  })
+
+  /** Signed-in person for chrome (sidebar/menu). Journal data stays on `user` (owner when mentoring). */
+  const sessionIdentity = computed(() => {
+    if (isMentor.value && mentorAccess.value?.mentor) {
+      const m = mentorAccess.value.mentor
+      return {
+        id: m.id,
+        email: m.email || null,
+        username: m.username || null,
+        full_name: m.full_name || m.fullName || null,
+        avatar_url: m.avatar_url || m.avatarUrl || null,
+        role: 'user',
+        isMentorSession: true
+      }
+    }
+    if (!user.value) return null
+    return { ...user.value, isMentorSession: false }
+  })
+
+  const sessionDisplayName = computed(() => {
+    const u = sessionIdentity.value
+    if (!u) return 'User'
+    return (
+      u.full_name?.trim() ||
+      u.username?.trim() ||
+      u.email?.split('@')[0] ||
+      'User'
+    )
+  })
+
+  const sessionEmail = computed(() => sessionIdentity.value?.email || null)
+
+  const sessionUsername = computed(() => sessionIdentity.value?.username || null)
+
+  const sessionAvatarUrl = computed(() => sessionIdentity.value?.avatar_url || null)
+
+  const sessionInitials = computed(() => {
+    const u = sessionIdentity.value
+    if (!u) return '?'
+    const full = u.full_name?.trim()
+    if (full) {
+      const parts = full.split(/\s+/)
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      }
+      return parts[0].slice(0, 2).toUpperCase()
+    }
+    const uname = u.username?.trim()
+    if (uname) return uname.slice(0, 2).toUpperCase()
+    const email = u.email?.trim()
+    if (email) return email.slice(0, 2).toUpperCase()
+    return '?'
+  })
+
+  const menteeDisplayName = computed(() => {
+    const owner = mentorAccess.value?.owner
+    if (!owner) return null
+    return (
+      owner.full_name?.trim() ||
+      owner.fullName?.trim() ||
+      owner.username?.trim() ||
+      owner.email?.split('@')[0] ||
+      null
+    )
   })
 
   function markAuthenticated(sessionToken = null) {
@@ -253,7 +319,25 @@ export const useAuthStore = defineStore('auth', () => {
           ...settings
         }
       }
-      mentorAccess.value = response.data.mentorAccess || null
+      const rawMentorAccess = response.data.mentorAccess || null
+      if (rawMentorAccess?.isMentor) {
+        const m = rawMentorAccess.mentor || {}
+        const o = rawMentorAccess.owner || {}
+        mentorAccess.value = {
+          ...rawMentorAccess,
+          mentor: {
+            ...m,
+            full_name: m.full_name ?? m.fullName ?? null,
+            avatar_url: m.avatar_url ?? m.avatarUrl ?? null
+          },
+          owner: {
+            ...o,
+            full_name: o.full_name ?? o.fullName ?? null
+          }
+        }
+      } else {
+        mentorAccess.value = rawMentorAccess
+      }
       const mentorSession = Boolean(mentorAccess.value?.isMentor)
       setMentorSessionActive(mentorSession)
       markAuthenticated(token.value)
@@ -537,6 +621,13 @@ export const useAuthStore = defineStore('auth', () => {
     registrationConfig,
     pendingOnboarding,
     mentorAccess,
+    sessionIdentity,
+    sessionDisplayName,
+    sessionEmail,
+    sessionUsername,
+    sessionAvatarUrl,
+    sessionInitials,
+    menteeDisplayName,
     showOnboardingModal,
     isAuthenticated,
     isMentor,

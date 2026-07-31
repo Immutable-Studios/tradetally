@@ -5,6 +5,15 @@
             <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
                 Configure your application preferences and AI provider settings.
             </p>
+            <div
+                v-if="authStore.isMentor"
+                class="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-100"
+            >
+                Mentor session for
+                <span class="font-semibold">{{ authStore.menteeDisplayName || 'this mentee' }}</span>.
+                Import, mentor management, and account-security changes stay locked.
+                Display preferences below affect how you review their journal.
+            </div>
         </div>
 
         <!-- Tabs Navigation -->
@@ -1505,6 +1514,7 @@
                     :csv-export-loading="csvExportLoading"
                     :import-loading="importLoading"
                     :selected-file="selectedFile"
+                    :hide-import="authStore.isMentor"
                     @export="exportUserData"
                     @export-csv="exportTradesToCSV"
                     @file-select="handleFileSelect"

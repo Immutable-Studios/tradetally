@@ -10,9 +10,14 @@
             <p
                 class="text-sm text-gray-600 dark:text-gray-400 mb-6"
             >
-                Export all your trading data, settings, and trading
-                profile as a JSON file. You can also import
-                previously exported data.
+                <template v-if="hideImport">
+                    Export this mentee's trading data as JSON or CSV for offline review.
+                </template>
+                <template v-else>
+                    Export all your trading data, settings, and trading
+                    profile as a JSON file. You can also import
+                    previously exported data.
+                </template>
             </p>
 
             <div class="space-y-6">
@@ -119,8 +124,9 @@
                     </button>
                 </div>
 
-                <!-- Import Section -->
+                <!-- Import Section (owners only — mentors cannot mutate import pipelines) -->
                 <div
+                    v-if="!hideImport"
                     class="flex items-start space-x-4 pt-6 border-t border-gray-200 dark:border-gray-700"
                 >
                     <div class="flex-1">
@@ -169,7 +175,7 @@
 
                 <!-- Selected File and Import Button -->
                 <div
-                    v-if="selectedFile"
+                    v-if="!hideImport && selectedFile"
                     class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800 rounded-lg"
                 >
                     <span
@@ -222,6 +228,7 @@ defineProps({
     csvExportLoading: { type: Boolean, default: false },
     importLoading: { type: Boolean, default: false },
     selectedFile: { default: null },
+    hideImport: { type: Boolean, default: false },
 });
 
 defineEmits(["export", "export-csv", "file-select", "import"]);

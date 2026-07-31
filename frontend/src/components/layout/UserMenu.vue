@@ -69,16 +69,25 @@
                 </p>
                 <span
                   v-if="roleBadge"
-                  class="shrink-0 rounded-[3px] bg-primary-500/15 px-1.5 py-0 text-[9px] font-bold uppercase leading-[14px] tracking-wider text-primary-700 dark:bg-primary-400/15 dark:text-primary-300"
+                  class="shrink-0 rounded-[3px] px-1.5 py-0 text-[9px] font-bold uppercase leading-[14px] tracking-wider"
+                  :class="roleBadge === 'Mentor'
+                    ? 'bg-sky-500/15 text-sky-800 dark:bg-sky-400/15 dark:text-sky-200'
+                    : 'bg-primary-500/15 text-primary-700 dark:bg-primary-400/15 dark:text-primary-300'"
                 >
                   {{ roleBadge }}
                 </span>
               </div>
-              <p v-if="authStore.user?.email" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
-                {{ authStore.user.email }}
+              <p v-if="sessionEmail" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                {{ sessionEmail }}
               </p>
-              <p v-if="authStore.user?.username" class="mt-1.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
-                @{{ authStore.user.username }}
+              <p v-if="sessionUsername" class="mt-1.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
+                @{{ sessionUsername }}
+              </p>
+              <p
+                v-if="authStore.isMentor && authStore.menteeDisplayName"
+                class="mt-1.5 truncate text-[11px] text-sky-700 dark:text-sky-300"
+              >
+                Viewing {{ authStore.menteeDisplayName }}'s journal
               </p>
             </div>
           </div>
@@ -159,45 +168,17 @@ const hoverTimeout = ref(null)
 const isMobile = ref(false)
 
 const isAdmin = computed(() =>
-  authStore.user?.role === 'admin' || authStore.user?.role === 'owner'
+  !authStore.isMentor && (authStore.user?.role === 'admin' || authStore.user?.role === 'owner')
 )
 
-const displayName = computed(() => {
-  const u = authStore.user
-  if (!u) return 'User'
-  return (
-    u.full_name?.trim() ||
-    u.username?.trim() ||
-    u.email?.split('@')[0] ||
-    'User'
-  )
-})
-
-const initials = computed(() => {
-  const u = authStore.user
-  if (!u) return '?'
-
-  const full = u.full_name?.trim()
-  if (full) {
-    const parts = full.split(/\s+/)
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    }
-    return parts[0].slice(0, 2).toUpperCase()
-  }
-
-  const uname = u.username?.trim()
-  if (uname) return uname.slice(0, 2).toUpperCase()
-
-  const email = u.email?.trim()
-  if (email) return email.slice(0, 2).toUpperCase()
-
-  return '?'
-})
-
-const avatarUrl = computed(() => authStore.user?.avatar_url || null)
+const displayName = computed(() => authStore.sessionDisplayName)
+const initials = computed(() => authStore.sessionInitials)
+const avatarUrl = computed(() => authStore.sessionAvatarUrl)
+const sessionEmail = computed(() => authStore.sessionEmail)
+const sessionUsername = computed(() => authStore.sessionUsername)
 
 const roleBadge = computed(() => {
+  if (authStore.isMentor) return 'Mentor'
   const role = authStore.user?.role
   if (role === 'owner') return 'Owner'
   if (role === 'admin') return 'Admin'
@@ -206,10 +187,17 @@ const roleBadge = computed(() => {
 
 const items = computed(() => {
   const list = [
-    { name: 'My Profile', to: '/profile', route: 'profile', icon: UserCircleIcon },
-    { name: 'Price Alerts', to: '/price-alerts', route: 'price-alerts', icon: BellAlertIcon },
-    { name: 'Settings', to: '/settings', route: 'settings', icon: Cog6ToothIcon }
+    {
+      name: authStore.isMentor ? 'Session' : 'My Profile',
+      to: '/profile',
+      route: 'profile',
+      icon: UserCircleIcon
+    }
   ]
+  if (!authStore.isMentor) {
+    list.push({ name: 'Price Alerts', to: '/price-alerts', route: 'price-alerts', icon: BellAlertIcon })
+  }
+  list.push({ name: 'Settings', to: '/settings', route: 'settings', icon: Cog6ToothIcon })
   if (isAdmin.value) {
     list.push({
       name: 'Admin',

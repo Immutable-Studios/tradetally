@@ -77,6 +77,8 @@ const canDismiss = computed(() => {
 })
 
 const showBanner = computed(() => {
+  // Mentors see the owner's user payload — never nag them to verify the mentee's email.
+  if (authStore.isMentor) return false
   if (!isUnverified.value) return false
   if (gracePeriodExpired.value) return true
   return !dismissed.value

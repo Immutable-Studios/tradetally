@@ -229,10 +229,21 @@
       <div v-else-if="tradesStore.trades.length === 0 && !tradesStore.loading" class="text-center py-12">
         <DocumentTextIcon class="mx-auto h-12 w-12 text-gray-400" />
         <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">No trades</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <p v-if="authStore.isMentor" class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          No shared trades match this filter. Try All Accounts or check the mentee's daily journal.
+        </p>
+        <p v-else class="mt-1 text-sm text-gray-500 dark:text-gray-400">
           Import from your broker or add a trade manually to get started.
         </p>
-        <div class="mt-6 flex items-center justify-center gap-3">
+        <div v-if="authStore.isMentor" class="mt-6 flex items-center justify-center gap-3">
+          <router-link to="/daily" class="btn-primary">
+            Open daily review
+          </router-link>
+          <router-link to="/diary" class="btn-secondary">
+            View diary
+          </router-link>
+        </div>
+        <div v-else class="mt-6 flex items-center justify-center gap-3">
           <router-link to="/import" class="btn-primary">
             Import trades
           </router-link>
@@ -1083,6 +1094,7 @@
 import { onMounted, computed, watch, ref, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTradesStore } from '@/stores/trades'
+import { useAuthStore } from '@/stores/auth'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
 import { useUserTimezone } from '@/composables/useUserTimezone'
@@ -1104,6 +1116,7 @@ import { getTradeDateOnlyParts } from '@/utils/date'
 import { getTradeGrossPnl, isTradeOpen } from '@/utils/tradePnl'
 
 const tradesStore = useTradesStore()
+const authStore = useAuthStore()
 const uiPreferencesStore = useUiPreferencesStore()
 const { selectedAccount } = useGlobalAccountFilter()
 const { formatCurrency, currencySymbol, formatSignedCurrency } = useCurrencyFormatter()

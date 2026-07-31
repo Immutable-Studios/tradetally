@@ -54,7 +54,8 @@ async function resolveMentorAccess(req) {
         id: req.authUser.id,
         email: req.authUser.email,
         username: req.authUser.username,
-        fullName: req.authUser.full_name
+        fullName: req.authUser.full_name,
+        avatarUrl: req.authUser.avatar_url || null
       }
     };
     console.log(

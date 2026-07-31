@@ -55,6 +55,13 @@
     <!-- Global account selector (hidden when collapsed) -->
     <div v-if="!isCollapsed" class="border-b border-gray-200/60 px-3 py-2.5 dark:border-gray-800/60">
       <GlobalAccountSelector />
+      <p
+        v-if="authStore.isMentor && authStore.menteeDisplayName"
+        class="mt-2 truncate px-1 text-[11px] text-sky-700 dark:text-sky-300"
+        :title="`Mentoring ${authStore.menteeDisplayName}`"
+      >
+        Mentoring {{ authStore.menteeDisplayName }}
+      </p>
     </div>
 
     <!-- Primary nav (scrollable) -->
@@ -214,13 +221,16 @@
               <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ displayName }}</p>
               <span
                 v-if="roleBadge"
-                class="shrink-0 rounded-[3px] bg-primary-500/15 px-1 py-0 text-[8px] font-bold uppercase leading-[13px] tracking-wider text-primary-700 dark:bg-primary-400/15 dark:text-primary-300"
+                class="shrink-0 rounded-[3px] px-1 py-0 text-[8px] font-bold uppercase leading-[13px] tracking-wider"
+                :class="roleBadge === 'Mentor'
+                  ? 'bg-sky-500/15 text-sky-800 dark:bg-sky-400/15 dark:text-sky-200'
+                  : 'bg-primary-500/15 text-primary-700 dark:bg-primary-400/15 dark:text-primary-300'"
               >
                 {{ roleBadge }}
               </span>
             </div>
-            <p v-if="authStore.user?.email" class="truncate text-[11px] text-gray-500 dark:text-gray-400">
-              {{ authStore.user.email }}
+            <p v-if="sessionEmail" class="truncate text-[11px] text-gray-500 dark:text-gray-400">
+              {{ sessionEmail }}
             </p>
           </div>
           <ChevronUpDownIcon class="h-4 w-4 shrink-0 text-gray-400 transition-colors group-hover:text-gray-600 dark:group-hover:text-gray-300" />
@@ -256,16 +266,25 @@
                   <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ displayName }}</p>
                   <span
                     v-if="roleBadge"
-                    class="shrink-0 rounded-[3px] bg-primary-500/15 px-1.5 py-0 text-[9px] font-bold uppercase leading-[14px] tracking-wider text-primary-700 dark:bg-primary-400/15 dark:text-primary-300"
+                    class="shrink-0 rounded-[3px] px-1.5 py-0 text-[9px] font-bold uppercase leading-[14px] tracking-wider"
+                    :class="roleBadge === 'Mentor'
+                      ? 'bg-sky-500/15 text-sky-800 dark:bg-sky-400/15 dark:text-sky-200'
+                      : 'bg-primary-500/15 text-primary-700 dark:bg-primary-400/15 dark:text-primary-300'"
                   >
                     {{ roleBadge }}
                   </span>
                 </div>
-                <p v-if="authStore.user?.email" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
-                  {{ authStore.user.email }}
+                <p v-if="sessionEmail" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {{ sessionEmail }}
                 </p>
-                <p v-if="authStore.user?.username" class="mt-1.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
-                  @{{ authStore.user.username }}
+                <p v-if="sessionUsername" class="mt-1.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
+                  @{{ sessionUsername }}
+                </p>
+                <p
+                  v-if="authStore.isMentor && authStore.menteeDisplayName"
+                  class="mt-1.5 truncate text-[11px] text-sky-700 dark:text-sky-300"
+                >
+                  Viewing {{ authStore.menteeDisplayName }}'s journal
                 </p>
               </div>
             </div>
@@ -289,11 +308,12 @@
                 class="h-4 w-4 shrink-0 transition-colors"
                 :class="$route.name === 'profile' ? 'text-primary-500 dark:text-primary-400' : 'text-gray-400 group-hover/item:text-primary-500 dark:text-gray-500 dark:group-hover/item:text-primary-400'"
               />
-              <span class="flex-1">My Profile</span>
+              <span class="flex-1">{{ authStore.isMentor ? 'Session' : 'My Profile' }}</span>
               <ChevronRightIcon class="popover-chevron" />
             </router-link>
 
             <router-link
+              v-if="!authStore.isMentor"
               to="/price-alerts"
               @click="closeUserMenu"
               class="popover-item group/item"
@@ -466,7 +486,7 @@ const isLgScreen = ref(false)
 const isCollapsed = computed(() => collapsed.value && isLgScreen.value)
 
 const isAdmin = computed(() =>
-  authStore.user?.role === 'admin' || authStore.user?.role === 'owner'
+  !authStore.isMentor && (authStore.user?.role === 'admin' || authStore.user?.role === 'owner')
 )
 
 const isAdminRouteActive = computed(() => {
@@ -544,43 +564,19 @@ const navItems = computed(() => {
 })
 
 const showUpgradeCard = computed(() => {
-  if (!isBillingEnabled.value) return false
+  if (authStore.isMentor || !isBillingEnabled.value) return false
   const tier = authStore.user?.tier
   return tier && tier !== 'pro'
 })
 
-const displayName = computed(() => {
-  const u = authStore.user
-  if (!u) return 'User'
-  return (
-    u.full_name?.trim() ||
-    u.username?.trim() ||
-    u.email?.split('@')[0] ||
-    'User'
-  )
-})
-
-const initials = computed(() => {
-  const u = authStore.user
-  if (!u) return '?'
-  const full = u.full_name?.trim()
-  if (full) {
-    const parts = full.split(/\s+/)
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    }
-    return parts[0].slice(0, 2).toUpperCase()
-  }
-  const uname = u.username?.trim()
-  if (uname) return uname.slice(0, 2).toUpperCase()
-  const email = u.email?.trim()
-  if (email) return email.slice(0, 2).toUpperCase()
-  return '?'
-})
-
-const avatarUrl = computed(() => authStore.user?.avatar_url || null)
+const displayName = computed(() => authStore.sessionDisplayName)
+const initials = computed(() => authStore.sessionInitials)
+const avatarUrl = computed(() => authStore.sessionAvatarUrl)
+const sessionEmail = computed(() => authStore.sessionEmail)
+const sessionUsername = computed(() => authStore.sessionUsername)
 
 const roleBadge = computed(() => {
+  if (authStore.isMentor) return 'Mentor'
   const role = authStore.user?.role
   if (role === 'owner') return 'Owner'
   if (role === 'admin') return 'Admin'

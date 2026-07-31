@@ -143,4 +143,50 @@ describe('auth store', () => {
     expect(store.isAuthenticated).toBe(false)
     expect(store.user).toBe(null)
   })
+
+  it('exposes mentor session identity while keeping journal user as owner', async () => {
+    const { useAuthStore } = await import('./auth')
+    api.get.mockResolvedValueOnce({
+      data: {
+        user: {
+          id: 'owner-1',
+          email: 'danieladammiller@gmail.com',
+          username: 'danieladammiller',
+          fullName: 'Daniel',
+          onboarding_completed: false,
+          onboarding_step: 1
+        },
+        settings: {},
+        mentorAccess: {
+          isMentor: true,
+          canChangeImportSettings: false,
+          owner: {
+            id: 'owner-1',
+            email: 'danieladammiller@gmail.com',
+            username: 'danieladammiller',
+            fullName: 'Daniel'
+          },
+          mentor: {
+            id: 'mentor-1',
+            email: 'dan@immutablestudios.xyz',
+            username: 'dan',
+            fullName: 'Dan Mentor',
+            avatarUrl: 'https://cdn.example/mentor.png'
+          }
+        }
+      }
+    })
+
+    const store = useAuthStore()
+    await store.checkAuth()
+
+    expect(store.isMentor).toBe(true)
+    expect(store.user.email).toBe('danieladammiller@gmail.com')
+    expect(store.sessionEmail).toBe('dan@immutablestudios.xyz')
+    expect(store.sessionDisplayName).toBe('Dan Mentor')
+    expect(store.sessionAvatarUrl).toBe('https://cdn.example/mentor.png')
+    expect(store.menteeDisplayName).toBe('Daniel')
+    expect(store.showOnboardingModal).toBe(false)
+    expect(store.onboardingStep).toBe(6)
+  })
 })

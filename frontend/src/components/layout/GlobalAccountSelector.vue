@@ -36,19 +36,27 @@
     >
       <div
         v-if="isOpen"
-        class="absolute left-0 mt-2 w-72 rounded-md shadow-lg bg-white dark:bg-gray-800 ring-1 ring-black ring-opacity-5 dark:ring-gray-700 z-50"
+        class="absolute left-0 mt-2 w-80 rounded-md shadow-lg bg-white dark:bg-gray-800 ring-1 ring-black ring-opacity-5 dark:ring-gray-700 z-50"
       >
         <div class="py-1" role="menu">
           <!-- Header -->
-          <div class="px-4 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
-            {{ authStore.isMentor ? "Mentee's accounts" : 'Filter by Account' }}
+          <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700">
+            <div class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              {{ authStore.isMentor ? "Mentee's accounts" : 'Filter by Account' }}
+            </div>
+            <p
+              v-if="authStore.isMentor && authStore.menteeDisplayName"
+              class="mt-1 truncate text-sm font-medium text-gray-800 dark:text-gray-100"
+            >
+              {{ authStore.menteeDisplayName }}
+            </p>
           </div>
 
           <div
             v-if="authStore.isMentor"
             class="px-4 py-2 text-xs text-sky-800 dark:text-sky-200 border-b border-gray-100 dark:border-gray-700 bg-sky-50/80 dark:bg-sky-950/30"
           >
-            Showing brokerage accounts shared with you as a mentor.
+            Shared brokerage accounts for this mentee.
           </div>
 
           <!-- All Accounts Option -->
@@ -98,16 +106,16 @@
             >
               <div class="min-w-0 pr-3">
                 <div class="flex items-center gap-2 min-w-0">
-                  <span class="truncate">{{ account.label }}</span>
+                  <span class="truncate font-medium">{{ account.label }}</span>
                   <span
-                    v-if="account.sharedWithMentors"
+                    v-if="account.sharedWithMentors && !authStore.isMentor"
                     class="flex-shrink-0 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide rounded bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-200"
                     title="Shared with mentors"
                   >
-                    Mentor
+                    Shared
                   </span>
                 </div>
-                <div v-if="account.secondaryLabel" class="truncate text-xs text-gray-500 dark:text-gray-400">
+                <div v-if="account.secondaryLabel" class="mt-0.5 truncate text-xs tabular-nums text-gray-500 dark:text-gray-400">
                   {{ account.secondaryLabel }}
                 </div>
               </div>

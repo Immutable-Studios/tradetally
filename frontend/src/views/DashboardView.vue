@@ -198,7 +198,7 @@
 
     <!-- First-value onboarding banner: new users who have not imported yet (hidden while guided onboarding card is shown) -->
     <div
-      v-if="!initialLoading && !authStore.showOnboardingModal && onboardingStatus?.is_new && !onboardingStatus?.has_activated && !onboardingBannerDismissed"
+      v-if="!authStore.isMentor && !initialLoading && !authStore.showOnboardingModal && onboardingStatus?.is_new && !onboardingStatus?.has_activated && !onboardingBannerDismissed"
       class="card bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800 mb-6"
     >
       <div class="card-body">

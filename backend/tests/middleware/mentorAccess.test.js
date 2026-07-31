@@ -1,9 +1,22 @@
 const {
+  resolveMentorAccess,
   rejectMentorImportSettingsBody,
   forbidMentorImportChanges,
   forbidMentorAccountChanges,
   forbidMentorGrantManagement
 } = require('../../src/middleware/mentorAccess');
+
+jest.mock('../../src/models/AccountMentor', () => ({
+  activateForUser: jest.fn(async () => []),
+  findActiveForMentorUser: jest.fn()
+}));
+
+jest.mock('../../src/models/User', () => ({
+  findById: jest.fn()
+}));
+
+const AccountMentor = require('../../src/models/AccountMentor');
+const User = require('../../src/models/User');
 
 function mockRes() {
   const res = {};
@@ -71,5 +84,44 @@ describe('mentorAccess middleware', () => {
 
     forbidMentorGrantManagement(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  test('resolveMentorAccess exposes mentor avatar for session chrome', async () => {
+    const mentor = {
+      id: 'mentor-1',
+      email: 'dan@immutablestudios.xyz',
+      username: 'dan',
+      full_name: 'Dan Mentor',
+      avatar_url: 'https://cdn.example/mentor.png'
+    };
+    const owner = {
+      id: 'owner-1',
+      email: 'owner@example.com',
+      username: 'danieladammiller',
+      full_name: 'Daniel',
+      is_active: true
+    };
+
+    AccountMentor.findActiveForMentorUser.mockResolvedValue({
+      id: 'grant-1',
+      owner_user_id: owner.id,
+      mentor_user_id: mentor.id,
+      status: 'active'
+    });
+    User.findById.mockResolvedValue(owner);
+
+    const req = { user: mentor };
+    await resolveMentorAccess(req);
+
+    expect(req.isMentor).toBe(true);
+    expect(req.mentorAccess.mentor).toEqual(
+      expect.objectContaining({
+        id: mentor.id,
+        email: mentor.email,
+        avatarUrl: mentor.avatar_url,
+        fullName: mentor.full_name
+      })
+    );
+    expect(req.user.id).toBe(owner.id);
   });
 });

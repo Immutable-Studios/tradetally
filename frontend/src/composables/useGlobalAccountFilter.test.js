@@ -1,13 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { api } = vi.hoisted(() => ({
+const { api, authStoreState } = vi.hoisted(() => ({
   api: {
     get: vi.fn()
+  },
+  authStoreState: {
+    isMentor: false,
+    menteeDisplayName: null
   }
 }))
 
 vi.mock('@/services/api', () => ({
   default: api
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authStoreState
 }))
 
 async function loadComposable() {
@@ -19,6 +27,8 @@ describe('useGlobalAccountFilter', () => {
   beforeEach(() => {
     localStorage.clear()
     api.get.mockReset()
+    authStoreState.isMentor = false
+    authStoreState.menteeDisplayName = null
   })
 
   it('initializes from localStorage and persists account changes', async () => {
@@ -84,6 +94,49 @@ describe('useGlobalAccountFilter', () => {
         secondaryLabel: null,
         isPrimary: false,
         sharedWithMentors: false
+      }
+    ])
+  })
+
+  it('prefixes mentee name onto mentor account labels', async () => {
+    authStoreState.isMentor = true
+    authStoreState.menteeDisplayName = 'danieladammiller'
+    api.get.mockImplementation((url) => {
+      if (url === '/trades/accounts') {
+        return Promise.resolve({ data: { accounts: ['12345119', '98767790'] } })
+      }
+      if (url === '/accounts') {
+        return Promise.resolve({
+          data: {
+            data: [
+              { accountIdentifier: '12345119', accountName: null, sharedWithMentors: true },
+              { accountIdentifier: '98767790', accountName: 'IRA', sharedWithMentors: true }
+            ]
+          }
+        })
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`))
+    })
+
+    const { useGlobalAccountFilter, resetGlobalAccountFilter } = await loadComposable()
+    resetGlobalAccountFilter()
+    const filter = useGlobalAccountFilter()
+    await filter.fetchAccounts({ mentorOnlyShared: true })
+
+    expect(filter.accounts.value).toEqual([
+      {
+        value: '12345119',
+        label: 'danieladammiller · ****5119',
+        secondaryLabel: null,
+        isPrimary: false,
+        sharedWithMentors: true
+      },
+      {
+        value: '98767790',
+        label: 'danieladammiller · IRA',
+        secondaryLabel: '****7790',
+        isPrimary: false,
+        sharedWithMentors: true
       }
     ])
   })

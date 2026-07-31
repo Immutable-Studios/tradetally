@@ -1,5 +1,6 @@
 <template>
   <div
+    v-if="!authStore.isMentor"
     class="card border-primary-200 dark:border-primary-800 bg-primary-50/50 dark:bg-primary-900/20 mb-6"
     role="region"
     aria-labelledby="onboarding-card-title"
