@@ -423,18 +423,20 @@ const tradeV1Controller = {
         offset: 0,
         symbol: req.query.symbol,
         startDate: req.query.startDate,
-        endDate: req.query.endDate,
-        mentorMode: Boolean(req.isMentor)
+        endDate: req.query.endDate
       };
+      if (req.isMentor) filters.mentorMode = true;
+
+      const countFilters = {
+        symbol: req.query.symbol,
+        startDate: req.query.startDate,
+        endDate: req.query.endDate
+      };
+      if (req.isMentor) countFilters.mentorMode = true;
 
       const [trades, total] = await Promise.all([
         TradeQueries.findByUser(req.user.id, filters),
-        Trade.getCountWithFilters(req.user.id, {
-          symbol: req.query.symbol,
-          startDate: req.query.startDate,
-          endDate: req.query.endDate,
-          mentorMode: Boolean(req.isMentor)
-        })
+        Trade.getCountWithFilters(req.user.id, countFilters)
       ]);
 
       const sortedTrades = [...trades].sort(

@@ -3710,7 +3710,8 @@ const tradeController = {
       const { startDate, endDate, format = 'csv' } = req.query;
 
       // Build filters
-      const filters = { mentorMode: Boolean(req.isMentor) };
+      const filters = {};
+      if (req.isMentor) filters.mentorMode = true;
       if (startDate) filters.startDate = startDate;
       if (endDate) filters.endDate = endDate;
 
