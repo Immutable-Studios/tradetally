@@ -114,7 +114,20 @@ function parseTradeFilters(query = {}, options = {}) {
     }
     filters[field] = build(query, options);
   }
+  // Mentor sessions query the owner's journal; flag so TradeQueries can skip
+  // Schwab exclusions and honor shared_with_mentors on accounts.
+  if (options.mentorMode) {
+    filters.mentorMode = true;
+  }
   return filters;
+}
+
+/** Parse filters for an authenticated request, attaching mentorMode when needed. */
+function parseTradeFiltersForRequest(req, profile = {}) {
+  return parseTradeFilters(req.query || {}, {
+    ...profile,
+    mentorMode: Boolean(req?.isMentor)
+  });
 }
 
 // Per-endpoint profiles. Field order mirrors the original inline object
@@ -207,4 +220,4 @@ const tradeFilterProfiles = {
   }
 };
 
-module.exports = { parseTradeFilters, tradeFilterProfiles };
+module.exports = { parseTradeFilters, parseTradeFiltersForRequest, tradeFilterProfiles };

@@ -18,7 +18,8 @@ class Account {
       initialBalance,
       initialBalanceDate,
       isPrimary,
-      notes
+      notes,
+      sharedWithMentors
     } = accountData;
 
     // If setting as primary, unset existing primary first
@@ -32,9 +33,9 @@ class Account {
     const query = `
       INSERT INTO user_accounts (
         user_id, account_name, account_identifier, broker,
-        initial_balance, initial_balance_date, is_primary, notes
+        initial_balance, initial_balance_date, is_primary, notes, shared_with_mentors
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `;
 
@@ -46,7 +47,8 @@ class Account {
       initialBalance || 0,
       initialBalanceDate,
       isPrimary || false,
-      notes || null
+      notes || null,
+      sharedWithMentors !== false
     ]);
 
     console.log(`[ACCOUNTS] Created account "${accountName}" for user ${userId}`);
@@ -182,7 +184,8 @@ class Account {
       initialBalance: 'initial_balance',
       initialBalanceDate: 'initial_balance_date',
       isPrimary: 'is_primary',
-      notes: 'notes'
+      notes: 'notes',
+      sharedWithMentors: 'shared_with_mentors'
     };
 
     Object.entries(updates).forEach(([key, value]) => {

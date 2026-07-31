@@ -28,6 +28,7 @@ const accountController = {
         initialBalanceDate: account.initial_balance_date,
         isPrimary: account.is_primary,
         notes: account.notes,
+        sharedWithMentors: account.shared_with_mentors !== false,
         tradeCount: parseInt(account.trade_count) || 0,
         createdAt: account.created_at,
         updatedAt: account.updated_at
@@ -72,6 +73,7 @@ const accountController = {
           initialBalanceDate: account.initial_balance_date,
           isPrimary: account.is_primary,
           notes: account.notes,
+          sharedWithMentors: account.shared_with_mentors !== false,
           createdAt: account.created_at,
           updatedAt: account.updated_at
         }
@@ -198,7 +200,8 @@ const accountController = {
         initialBalance: parseFloat(initialBalance) || 0,
         initialBalanceDate: effectiveBalanceDate,
         isPrimary: isPrimary || false,
-        notes: notes || null
+        notes: notes || null,
+        sharedWithMentors: req.body.sharedWithMentors !== false
       });
 
       res.status(201).json({
@@ -212,6 +215,7 @@ const accountController = {
           initialBalanceDate: account.initial_balance_date,
           isPrimary: account.is_primary,
           notes: account.notes,
+          sharedWithMentors: account.shared_with_mentors !== false,
           createdAt: account.created_at
         }
       });
@@ -259,6 +263,7 @@ const accountController = {
           initialBalanceDate: account.initial_balance_date,
           isPrimary: account.is_primary,
           notes: account.notes,
+          sharedWithMentors: account.shared_with_mentors !== false,
           updatedAt: account.updated_at
         }
       });

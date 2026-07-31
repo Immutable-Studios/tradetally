@@ -14,7 +14,7 @@ const { groupTradesIntoPositions } = require('../utils/openPositionGrouping');
 const symbolCategories = require('../utils/symbolCategories');
 const imageProcessor = require('../utils/imageProcessor');
 const ensureString = require('../utils/ensureString');
-const { parseTradeFilters, tradeFilterProfiles } = require('../utils/tradeFilters');
+const { parseTradeFiltersForRequest, tradeFilterProfiles } = require('../utils/tradeFilters');
 const { DATA_START_DATE, isBeforeDataStart } = require('../utils/dataStartDate');
 const upload = require('../middleware/upload');
 const currencyConverter = require('../utils/currencyConverter');
@@ -508,7 +508,7 @@ const tradeController = {
             : 0);
 
       const filters = {
-        ...parseTradeFilters(req.query, tradeFilterProfiles.tradeList),
+        ...parseTradeFiltersForRequest(req, tradeFilterProfiles.tradeList),
         // Pagination
         limit: parsedLimit,
         offset: parsedOffset
@@ -611,7 +611,7 @@ const tradeController = {
 
   async getTradesCount(req, res, next) {
     try {
-      const filters = parseTradeFilters(req.query, tradeFilterProfiles.tradeCount);
+      const filters = parseTradeFiltersForRequest(req, tradeFilterProfiles.tradeCount);
 
       const total = await Trade.getCountWithFilters(req.user.id, filters);
       
@@ -628,7 +628,7 @@ const tradeController = {
   async exportTradesToCSV(req, res, next) {
     try {
       const filters = {
-        ...parseTradeFilters(req.query, tradeFilterProfiles.tradeExport),
+        ...parseTradeFiltersForRequest(req, tradeFilterProfiles.tradeExport),
         // No pagination - export all matching trades
         limit: 999999,
         offset: 0
@@ -716,7 +716,7 @@ const tradeController = {
       const { limit = 50, offset = 0 } = req.query;
 
       const filters = {
-        ...parseTradeFilters(req.query, tradeFilterProfiles.roundTrip),
+        ...parseTradeFiltersForRequest(req, tradeFilterProfiles.roundTrip),
         limit: parseInt(limit),
         offset: parseInt(offset)
       };
@@ -3297,7 +3297,7 @@ const tradeController = {
 
       const { minHoldTime, maxHoldTime } = req.query;
 
-      const filters = parseTradeFilters(req.query, tradeFilterProfiles.analytics);
+      const filters = parseTradeFiltersForRequest(req, tradeFilterProfiles.analytics);
 
       console.log('[ANALYTICS] Raw query:', req.query);
       console.log('[ANALYTICS] Parsed filters:', JSON.stringify(filters, null, 2));
@@ -3338,7 +3338,7 @@ const tradeController = {
     try {
       console.log('[PARTIAL-EXIT] Endpoint called, query:', req.query);
 
-      const filters = parseTradeFilters(req.query, tradeFilterProfiles.partialExit);
+      const filters = parseTradeFiltersForRequest(req, tradeFilterProfiles.partialExit);
 
       const cacheKey = `partial_exit_analytics:user_${req.user.id}:${JSON.stringify(filters)}`;
       const cached = cache.get(cacheKey);
@@ -3710,7 +3710,7 @@ const tradeController = {
       const { startDate, endDate, format = 'csv' } = req.query;
 
       // Build filters
-      const filters = {};
+      const filters = { mentorMode: Boolean(req.isMentor) };
       if (startDate) filters.startDate = startDate;
       if (endDate) filters.endDate = endDate;
 

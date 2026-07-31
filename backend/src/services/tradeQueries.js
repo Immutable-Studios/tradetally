@@ -426,6 +426,30 @@ class TradeQueries {
         filters.accounts.forEach(a => values.push(a));
         paramCount += filters.accounts.length;
       }
+
+      // Mentors may only select accounts the owner has shared.
+      if (filters.mentorMode && !filters.accounts.includes('__unsorted__')) {
+        whereClause += ` AND NOT EXISTS (
+          SELECT 1 FROM user_accounts ua
+          WHERE ua.user_id = $1
+            AND ua.account_identifier = t.account_identifier
+            AND ua.shared_with_mentors = false
+        )`;
+      }
+    } else if (filters.mentorMode) {
+      // Mentor "All Accounts": skip Schwab exclusions (mentors review the full
+      // shared book, including IRAs the owner hides from their own dashboard)
+      // and hide only accounts the owner marked not shared with mentors.
+      whereClause += ` AND (
+        t.account_identifier IS NULL
+        OR t.account_identifier = ''
+        OR NOT EXISTS (
+          SELECT 1 FROM user_accounts ua
+          WHERE ua.user_id = $1
+            AND ua.account_identifier = t.account_identifier
+            AND ua.shared_with_mentors = false
+        )
+      )`;
     } else {
       // When no account filter is selected, honor Schwab excluded accounts
       // (e.g. IRA ****7790) so Daily / analytics match the primary book only.

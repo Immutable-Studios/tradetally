@@ -21,8 +21,11 @@ const { POSITION_GROUP_KEY } = require('../utils/positionGrouping');
  * Trade Management page accepts the same filter set as the Performance page.
  * (limit/offset are handled separately by each endpoint.)
  */
-function parseTradeManagementFilters(query = {}) {
-  return parseTradeFilters(query, tradeFilterProfiles.tradeManagement);
+function parseTradeManagementFilters(query = {}, { mentorMode = false } = {}) {
+  return parseTradeFilters(query, {
+    ...tradeFilterProfiles.tradeManagement,
+    mentorMode
+  });
 }
 
 function inferInstrumentType(trade) {
@@ -1235,7 +1238,7 @@ const tradeManagementController = {
       const limit = parseInt(req.query.limit) || 100;
       const offset = parseInt(req.query.offset) || 0;
       // Same Performance-page filter set as the R-Performance chart (issue #351).
-      const filterSpec = parseTradeManagementFilters(req.query);
+      const filterSpec = parseTradeManagementFilters(req.query, { mentorMode: Boolean(req.isMentor) });
 
       logger.info('[TRADE-MGMT] getTradesForSelection called', { userId, filters: filterSpec, limit, offset });
 
@@ -1471,7 +1474,7 @@ const tradeManagementController = {
         }
 
         if (groupCondition) {
-          const filterSpec = parseTradeManagementFilters(req.query);
+          const filterSpec = parseTradeManagementFilters(req.query, { mentorMode: Boolean(req.isMentor) });
           const { whereClause, values, paramCount } = await TradeQueries._buildWhereClause(userId, filterSpec);
           const legsResult = await db.query(
             `SELECT t.*, COALESCE(NULLIF(t.underlying_symbol, ''), t.symbol) AS position_symbol
@@ -1913,7 +1916,7 @@ const tradeManagementController = {
       const limit = parseInt(req.query.limit) || 2000;
       // Full Performance-page filter set, applied via the shared WHERE builder so
       // statistics stay consistent with the rest of the app (issue #351).
-      const filterSpec = parseTradeManagementFilters(req.query);
+      const filterSpec = parseTradeManagementFilters(req.query, { mentorMode: Boolean(req.isMentor) });
 
       logger.info('[TRADE-MGMT] getRPerformance called', { userId, filters: filterSpec, limit });
 

@@ -423,7 +423,8 @@ const tradeV1Controller = {
         offset: 0,
         symbol: req.query.symbol,
         startDate: req.query.startDate,
-        endDate: req.query.endDate
+        endDate: req.query.endDate,
+        mentorMode: Boolean(req.isMentor)
       };
 
       const [trades, total] = await Promise.all([
@@ -431,7 +432,8 @@ const tradeV1Controller = {
         Trade.getCountWithFilters(req.user.id, {
           symbol: req.query.symbol,
           startDate: req.query.startDate,
-          endDate: req.query.endDate
+          endDate: req.query.endDate,
+          mentorMode: Boolean(req.isMentor)
         })
       ]);
 

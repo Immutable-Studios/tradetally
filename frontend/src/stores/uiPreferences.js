@@ -36,8 +36,31 @@ export const SYNCED_KEYS = Object.freeze([
   'tagOrder'
 ])
 
+// Sticky filters that can hide the (small) post-purge trade set. Mentors must
+// not inherit the owner's account/date selections or write them back.
+export const MENTOR_SESSION_FILTER_KEYS = Object.freeze([
+  'tradetally_global_account',
+  'tradeFilters',
+  'tradeFiltersPeriod',
+  'dashboardTimeRange',
+  'dashboardCustomStartDate',
+  'dashboardCustomEndDate',
+  'analyticsFilters',
+  'behavioralAnalyticsFilters',
+  'gamificationFilters',
+  'monthlyPerformanceYear'
+])
+
 const SYNCED_KEY_SET = new Set(SYNCED_KEYS)
+const MENTOR_FILTER_KEY_SET = new Set(MENTOR_SESSION_FILTER_KEYS)
 const SYNC_DEBOUNCE_MS = 800
+
+// Set by auth store — avoids a circular import with ./auth.
+let mentorSessionActive = false
+
+export function setMentorSessionActive(active) {
+  mentorSessionActive = Boolean(active)
+}
 
 function readLocal(key) {
   const raw = localStorage.getItem(key)
@@ -77,6 +100,12 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
   async function flush() {
     if (!initialized.value) return
     if (Object.keys(pending.value).length === 0) return
+    // Mentors view the owner's journal; never persist their local filter tweaks
+    // into the owner's synced preferences.
+    if (mentorSessionActive) {
+      pending.value = {}
+      return
+    }
 
     // Wait for any in-flight flush to settle so we send a coherent snapshot.
     if (flushInFlight) {
@@ -111,7 +140,7 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
     await flushInFlight
   }
 
-  async function init() {
+  async function init({ mentorSession = false } = {}) {
     if (initialized.value) return
     if (initInFlight) return initInFlight
 
@@ -122,6 +151,11 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
 
         // Server wins: hydrate localStorage from server values.
         for (const key of SYNCED_KEYS) {
+          if (mentorSession && MENTOR_FILTER_KEY_SET.has(key)) {
+            // Mentors start from an unfiltered view of the mentee's journal.
+            localStorage.removeItem(key)
+            continue
+          }
           if (Object.prototype.hasOwnProperty.call(remote, key)) {
             const value = remote[key]
             if (value === null || value === undefined) {
@@ -138,6 +172,11 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
         initialized.value = true
       } catch (err) {
         console.warn('[UI PREFS] Failed to load remote preferences, continuing with local values:', err?.response?.status || err?.message)
+        if (mentorSession) {
+          for (const key of MENTOR_SESSION_FILTER_KEYS) {
+            localStorage.removeItem(key)
+          }
+        }
         // Still mark as initialized so subsequent writes attempt to sync.
         initialized.value = true
       }
@@ -157,6 +196,7 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
   // The local write still happens at the call site so reads stay synchronous.
   function notifyChanged(key, value) {
     if (!SYNCED_KEY_SET.has(key)) return
+    if (mentorSessionActive) return
     pending.value = { ...pending.value, [key]: value }
     scheduleFlush()
   }
@@ -175,12 +215,27 @@ export const useUiPreferencesStore = defineStore('uiPreferences', () => {
     document.documentElement.classList.remove('dark')
   }
 
+  /** Allow a subsequent init({ mentorSession: true }) without wiping theme prefs. */
+  function invalidateForMentorSession() {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    pending.value = {}
+    initialized.value = false
+    initInFlight = null
+    for (const key of MENTOR_SESSION_FILTER_KEYS) {
+      localStorage.removeItem(key)
+    }
+  }
+
   return {
     initialized,
     init,
     notifyChanged,
     flush,
     reset,
+    invalidateForMentorSession,
     applyDarkModeFromStorage
   }
 })

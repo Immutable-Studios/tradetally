@@ -308,7 +308,8 @@ const behavioralAnalyticsController = {
         daysOfWeek: daysOfWeek ? ensureString(daysOfWeek).split(',').map(d => parseInt(d)) : undefined,
         instrumentTypes: instrumentTypes ? ensureString(instrumentTypes).split(',') : undefined,
         optionTypes: optionTypes ? ensureString(optionTypes).split(',') : undefined,
-        qualityGrades: qualityGrades ? ensureString(qualityGrades).split(',') : undefined
+        qualityGrades: qualityGrades ? ensureString(qualityGrades).split(',') : undefined,
+        mentorMode: Boolean(req.isMentor)
       };
 
       // === Layer 1: trade-derived signals (always computed) ===

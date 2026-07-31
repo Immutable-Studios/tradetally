@@ -1,4 +1,4 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useAccountsStore } from '@/stores/accounts'
@@ -50,6 +50,32 @@ function redactAccountId(accountId) {
   }
 
   return str
+}
+
+/**
+ * Reset singleton filter state across logout / mentor-session prep.
+ * Does not write to uiPreferences unless sync is true.
+ */
+export function resetGlobalAccountFilter({ sync = false } = {}) {
+  selectedAccount.value = null
+  accounts.value = []
+  loading.value = false
+  initialized.value = false
+  localStorage.removeItem(STORAGE_KEY)
+  if (sync) {
+    try {
+      useUiPreferencesStore().notifyChanged(STORAGE_KEY, null)
+    } catch (_) {
+      // no Pinia
+    }
+  }
+}
+
+/** Re-read selection from localStorage after prefs hydrate. */
+export function syncGlobalAccountFilterFromStorage() {
+  const stored = normalizeStoredAccount(localStorage.getItem(STORAGE_KEY))
+  selectedAccount.value = stored
+  initialized.value = true
 }
 
 export function useGlobalAccountFilter() {
@@ -104,6 +130,7 @@ export function useGlobalAccountFilter() {
   async function fetchAccounts(options = {}) {
     if (loading.value) return
     const force = options.force === true
+    const mentorOnlyShared = options.mentorOnlyShared === true
     loading.value = true
     try {
       const [tradeAccountsResult, managedAccountsResult] = await Promise.allSettled([
@@ -114,9 +141,15 @@ export function useGlobalAccountFilter() {
       const tradeAccounts = tradeAccountsResult.status === 'fulfilled'
         ? (tradeAccountsResult.value.data.accounts || [])
         : []
-      const managedAccounts = managedAccountsResult.status === 'fulfilled'
+      let managedAccounts = managedAccountsResult.status === 'fulfilled'
         ? (managedAccountsResult.value || [])
         : []
+
+      if (mentorOnlyShared) {
+        managedAccounts = managedAccounts.filter(
+          (account) => account.sharedWithMentors !== false
+        )
+      }
 
       const managedAccountMap = new Map(
         managedAccounts
@@ -124,10 +157,24 @@ export function useGlobalAccountFilter() {
           .filter(([value]) => Boolean(value))
       )
 
-      const accountIdentifiers = Array.from(new Set([
+      const unsharedManagedIds = new Set(
+        (managedAccountsResult.status === 'fulfilled' ? (managedAccountsResult.value || []) : [])
+          .filter((account) => account.sharedWithMentors === false)
+          .map(getAccountFilterValue)
+          .filter(Boolean)
+      )
+
+      let accountIdentifiers = Array.from(new Set([
         ...tradeAccounts.map(normalizeStoredAccount).filter(Boolean),
         ...managedAccounts.map(getAccountFilterValue).filter(Boolean)
-      ])).sort((a, b) => a.localeCompare(b))
+      ]))
+
+      // Mentors should not see (or stick to) accounts the owner marked private.
+      if (mentorOnlyShared) {
+        accountIdentifiers = accountIdentifiers.filter((id) => !unsharedManagedIds.has(id))
+      }
+
+      accountIdentifiers.sort((a, b) => a.localeCompare(b))
 
       accounts.value = accountIdentifiers.map(identifier => {
         const managedAccount = managedAccountMap.get(identifier)
@@ -139,7 +186,12 @@ export function useGlobalAccountFilter() {
           secondaryLabel: managedAccount?.accountName && managedAccount.accountName !== identifier
             ? redactedIdentifier
             : null,
-          isPrimary: Boolean(managedAccount?.isPrimary)
+          isPrimary: Boolean(managedAccount?.isPrimary),
+          // Badge only for managed accounts explicitly shared with mentors.
+          // Unmanaged trade identifiers remain mentor-visible but unlabeled.
+          sharedWithMentors: Boolean(
+            managedAccount && managedAccount.sharedWithMentors !== false
+          )
         }
       })
 
@@ -148,7 +200,7 @@ export function useGlobalAccountFilter() {
       // Validate stored selection still exists (allow special UNSORTED_ACCOUNT value)
       if (hasAccountData && selectedAccount.value && selectedAccount.value !== UNSORTED_ACCOUNT && !accounts.value.some(account => account.value === selectedAccount.value)) {
         console.log('[GLOBAL ACCOUNT] Stored account no longer exists, clearing filter')
-        clearAccount()
+        clearAccount({ sync: !mentorOnlyShared })
       }
     } catch (error) {
       console.error('[GLOBAL ACCOUNT] Failed to fetch accounts:', error)
@@ -168,7 +220,7 @@ export function useGlobalAccountFilter() {
     }
   }
 
-  function setAccount(accountId) {
+  function setAccount(accountId, { sync = true } = {}) {
     const normalized = normalizeStoredAccount(accountId)
     selectedAccount.value = normalized
     if (normalized) {
@@ -176,14 +228,14 @@ export function useGlobalAccountFilter() {
     } else {
       localStorage.removeItem(STORAGE_KEY)
     }
-    notifyPreferenceChange(normalized || null)
+    if (sync) notifyPreferenceChange(normalized || null)
     console.log('[GLOBAL ACCOUNT] Set to:', normalized || 'All Accounts')
   }
 
-  function clearAccount() {
+  function clearAccount({ sync = true } = {}) {
     selectedAccount.value = null
     localStorage.removeItem(STORAGE_KEY)
-    notifyPreferenceChange(null)
+    if (sync) notifyPreferenceChange(null)
     console.log('[GLOBAL ACCOUNT] Cleared - showing all accounts')
   }
 

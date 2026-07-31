@@ -798,7 +798,8 @@ const schemas = {
     initialBalance: Joi.number().min(0).default(0),
     initialBalanceDate: nullableDate.required(),
     isPrimary: Joi.boolean().default(false),
-    notes: nullableString(2000)
+    notes: nullableString(2000),
+    sharedWithMentors: Joi.boolean().default(true)
   }),
 
   accountUpdate: Joi.object({
@@ -808,7 +809,8 @@ const schemas = {
     initialBalance: Joi.number().min(0),
     initialBalanceDate: nullableDate,
     isPrimary: Joi.boolean(),
-    notes: nullableString(2000)
+    notes: nullableString(2000),
+    sharedWithMentors: Joi.boolean()
   }).min(1),
 
   accountTransaction: Joi.object({

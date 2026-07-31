@@ -57,6 +57,9 @@ async function resolveMentorAccess(req) {
         fullName: req.authUser.full_name
       }
     };
+    console.log(
+      `[MENTOR] Scoped mentor ${req.authUser.id} onto owner ${owner.id} journal`
+    );
   } catch (err) {
     console.warn('[MENTOR] Failed to resolve mentor access:', err.message);
   }

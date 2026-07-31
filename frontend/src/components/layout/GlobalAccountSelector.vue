@@ -4,7 +4,7 @@
     <button
       @click="toggleDropdown"
       class="flex items-center space-x-2 px-3 py-2 text-sm rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-      :title="selectedAccountLabel"
+      :title="triggerTitle"
     >
       <!-- Account Icon -->
       <BuildingOfficeIcon class="h-5 w-5" />
@@ -41,7 +41,14 @@
         <div class="py-1" role="menu">
           <!-- Header -->
           <div class="px-4 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
-            Filter by Account
+            {{ authStore.isMentor ? "Mentee's accounts" : 'Filter by Account' }}
+          </div>
+
+          <div
+            v-if="authStore.isMentor"
+            class="px-4 py-2 text-xs text-sky-800 dark:text-sky-200 border-b border-gray-100 dark:border-gray-700 bg-sky-50/80 dark:bg-sky-950/30"
+          >
+            Showing brokerage accounts shared with you as a mentor.
           </div>
 
           <!-- All Accounts Option -->
@@ -90,7 +97,16 @@
               role="menuitem"
             >
               <div class="min-w-0 pr-3">
-                <div class="truncate">{{ account.label }}</div>
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="truncate">{{ account.label }}</span>
+                  <span
+                    v-if="account.sharedWithMentors"
+                    class="flex-shrink-0 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide rounded bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-200"
+                    title="Shared with mentors"
+                  >
+                    Mentor
+                  </span>
+                </div>
                 <div v-if="account.secondaryLabel" class="truncate text-xs text-gray-500 dark:text-gray-400">
                   {{ account.secondaryLabel }}
                 </div>
@@ -104,6 +120,7 @@
 
           <!-- Manage Accounts -->
           <button
+            v-if="!authStore.isMentor"
             @click="handleManageAccounts"
             class="w-full text-left px-4 py-2 text-sm flex items-center space-x-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
             role="menuitem"
@@ -111,6 +128,12 @@
             <Cog6ToothIcon class="h-4 w-4 flex-shrink-0" />
             <span>Manage Accounts</span>
           </button>
+          <div
+            v-else
+            class="px-4 py-2 text-xs text-gray-500 dark:text-gray-400"
+          >
+            Account sharing is managed by the journal owner.
+          </div>
         </div>
       </div>
     </transition>
@@ -118,12 +141,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { BuildingOfficeIcon, ChevronDownIcon, CheckIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const {
   selectedAccount,
@@ -140,25 +165,41 @@ const {
 const isOpen = ref(false)
 const dropdownRef = ref(null)
 
+const triggerTitle = computed(() => {
+  if (authStore.isMentor) {
+    return selectedAccount.value
+      ? `Mentee's account: ${selectedAccountLabel.value}`
+      : "Mentee's accounts (all shared)"
+  }
+  return selectedAccountLabel.value
+})
+
+function loadAccounts() {
+  return fetchAccounts({
+    force: true,
+    mentorOnlyShared: authStore.isMentor
+  })
+}
+
 function toggleDropdown() {
   isOpen.value = !isOpen.value
   if (isOpen.value && accounts.value.length === 0) {
-    fetchAccounts()
+    loadAccounts()
   }
 }
 
 function handleSelectAccount(account) {
-  setAccount(account)
+  setAccount(account, { sync: !authStore.isMentor })
   isOpen.value = false
 }
 
 function handleClearAccount() {
-  clearAccount()
+  clearAccount({ sync: !authStore.isMentor })
   isOpen.value = false
 }
 
 function handleSelectUnsorted() {
-  setAccount(UNSORTED_ACCOUNT)
+  setAccount(UNSORTED_ACCOUNT, { sync: !authStore.isMentor })
   isOpen.value = false
 }
 
@@ -177,7 +218,7 @@ onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   // Fetch accounts on mount if not already loaded
   if (accounts.value.length === 0) {
-    fetchAccounts()
+    loadAccounts()
   }
 })
 

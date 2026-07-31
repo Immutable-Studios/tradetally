@@ -3,7 +3,13 @@ import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { setSessionAuthToken } from '@/services/api'
 import router from '@/router'
-import { useUiPreferencesStore } from '@/stores/uiPreferences'
+import { useUiPreferencesStore, setMentorSessionActive } from '@/stores/uiPreferences'
+import { useAccountsStore } from '@/stores/accounts'
+import { useTradesStore } from '@/stores/trades'
+import {
+  resetGlobalAccountFilter,
+  syncGlobalAccountFilterFromStorage
+} from '@/composables/useGlobalAccountFilter'
 
 function hasSessionCookie() {
   if (typeof document === 'undefined') return false
@@ -62,6 +68,8 @@ export const useAuthStore = defineStore('auth', () => {
     mentorAccess.value = null
     token.value = null
     setSessionAuthToken(null)
+    setMentorSessionActive(false)
+    resetGlobalAccountFilter({ sync: false })
     // Clear the JS-readable csrf_token cookie so the synchronous session hint
     // doesn't keep us in an authenticated-looking state after the real session
     // has been invalidated. Try a few path/domain variants for safety.
@@ -69,6 +77,29 @@ export const useAuthStore = defineStore('auth', () => {
       const expired = 'csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'
       document.cookie = expired
       document.cookie = `${expired}; domain=${window.location.hostname}`
+    }
+  }
+
+  function prepareMentorSessionFilters() {
+    // Mentors must not inherit the owner's sticky account/date filters — after
+    // the data purge those often point at an empty slice of the journal.
+    resetGlobalAccountFilter({ sync: false })
+    syncGlobalAccountFilterFromStorage()
+    try {
+      useAccountsStore().invalidateAccounts()
+    } catch (_) {
+      // Pinia may not be ready during early boot
+    }
+    try {
+      const tradesStore = useTradesStore()
+      tradesStore.setFilters({
+        ...tradesStore.filters,
+        accounts: '',
+        startDate: '',
+        endDate: ''
+      })
+    } catch (_) {
+      // trades store optional during auth
     }
   }
 
@@ -223,13 +254,27 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
       mentorAccess.value = response.data.mentorAccess || null
+      const mentorSession = Boolean(mentorAccess.value?.isMentor)
+      setMentorSessionActive(mentorSession)
       markAuthenticated(token.value)
 
       // Hydrate cross-device UI preferences from the server. Awaited so any
       // component that mounts after this point (NavBar, view filters, etc.)
-      // reads the freshly-synced localStorage values.
+      // reads the freshly-synced localStorage values. Mentors skip sticky
+      // account/date filters so they see the mentee's full journal.
       try {
-        await useUiPreferencesStore().init()
+        const prefsStore = useUiPreferencesStore()
+        // Force re-init when switching into a mentor session so owner filter
+        // prefs from a prior non-mentor init on this tab are not kept.
+        if (mentorSession && prefsStore.initialized) {
+          prefsStore.invalidateForMentorSession()
+        }
+        await prefsStore.init({ mentorSession })
+        if (mentorSession) {
+          prepareMentorSessionFilters()
+        } else {
+          syncGlobalAccountFilterFromStorage()
+        }
       } catch (prefsErr) {
         console.warn('[AUTH] UI preference hydration failed:', prefsErr?.message)
       }

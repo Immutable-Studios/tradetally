@@ -125,6 +125,22 @@
                   <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Set as primary account</span>
                 </label>
               </div>
+
+              <div class="flex items-start">
+                <label class="flex items-start cursor-pointer">
+                  <input
+                    type="checkbox"
+                    v-model="form.sharedWithMentors"
+                    class="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                    Share with mentors
+                    <span class="block text-xs text-gray-500 dark:text-gray-400 font-normal">
+                      Mentors can see trades for this account in the journal filter.
+                    </span>
+                  </span>
+                </label>
+              </div>
             </div>
 
             <div>
@@ -170,6 +186,12 @@
                   <span class="font-medium text-gray-900 dark:text-white">{{ account.accountName }}</span>
                   <span v-if="account.isPrimary" class="px-2 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
                     Primary
+                  </span>
+                  <span
+                    v-if="account.sharedWithMentors !== false"
+                    class="px-2 py-0.5 text-xs font-medium rounded bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-200"
+                  >
+                    Mentor
                   </span>
                   <span v-if="account.broker" class="px-2 py-0.5 text-xs font-medium rounded bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
                     {{ formatBroker(account.broker) }}
@@ -316,6 +338,7 @@ const form = ref({
   initialBalance: 0,
   initialBalanceDate: new Date().toISOString().split('T')[0],
   isPrimary: false,
+  sharedWithMentors: true,
   notes: ''
 })
 
@@ -405,6 +428,7 @@ function createFromUnlinked(item) {
     initialBalance: 0,
     initialBalanceDate: item.earliestTradeDate || new Date().toISOString().split('T')[0],
     isPrimary: false,
+    sharedWithMentors: true,
     notes: ''
   }
   editingAccount.value = null
@@ -419,6 +443,7 @@ function resetForm() {
     initialBalance: 0,
     initialBalanceDate: new Date().toISOString().split('T')[0],
     isPrimary: false,
+    sharedWithMentors: true,
     notes: ''
   }
   editingAccount.value = null
@@ -433,6 +458,7 @@ function editAccount(account) {
     initialBalance: parseFloat(account.initialBalance) || 0,
     initialBalanceDate: account.initialBalanceDate?.split('T')[0] || new Date().toISOString().split('T')[0],
     isPrimary: account.isPrimary || false,
+    sharedWithMentors: account.sharedWithMentors !== false,
     notes: account.notes || ''
   }
   // Scroll to form
@@ -455,6 +481,7 @@ async function saveAccount() {
       initialBalance: form.value.initialBalance || 0,
       initialBalanceDate: form.value.initialBalanceDate,
       isPrimary: form.value.isPrimary,
+      sharedWithMentors: form.value.sharedWithMentors !== false,
       notes: form.value.notes || null
     }
 

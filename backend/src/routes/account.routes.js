@@ -9,6 +9,7 @@ const router = express.Router();
 const accountController = require('../controllers/account.controller');
 const plaidController = require('../controllers/plaid.controller');
 const { authenticate } = require('../middleware/auth');
+const { forbidMentorAccountChanges } = require('../middleware/mentorAccess');
 const { validate, schemas } = require('../middleware/validation');
 
 // All routes require authentication
@@ -43,12 +44,12 @@ router.get('/transactions/:transactionId', accountController.getTransactions);
 router.put('/transactions/:transactionId', validate(schemas.accountTransactionUpdate), accountController.updateTransaction);
 router.delete('/transactions/:transactionId', accountController.deleteTransaction);
 
-// Account CRUD
+// Account CRUD — mentors can list/view, but not mutate owner's accounts
 router.get('/', accountController.getAccounts);
-router.post('/', validate(schemas.accountCreate), accountController.createAccount);
+router.post('/', forbidMentorAccountChanges, validate(schemas.accountCreate), accountController.createAccount);
 router.get('/:id', accountController.getAccount);
-router.put('/:id', validate(schemas.accountUpdate), accountController.updateAccount);
-router.delete('/:id', accountController.deleteAccount);
+router.put('/:id', forbidMentorAccountChanges, validate(schemas.accountUpdate), accountController.updateAccount);
+router.delete('/:id', forbidMentorAccountChanges, accountController.deleteAccount);
 
 // Account-specific transactions
 router.get('/:accountId/transactions', accountController.getTransactions);

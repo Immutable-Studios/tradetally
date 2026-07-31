@@ -290,8 +290,9 @@ function convertQueryToTradeFilters(query) {
 // of `AND ...` conditions referencing the trades table via alias `t`, with
 // placeholders starting at $2 ($1 is the user id at every call site). Any
 // query embedding the fragment MUST alias its trades table as `t`.
-async function buildFilterConditions(query, userId) {
+async function buildFilterConditions(query, userId, mentorMode = false) {
   const filters = convertQueryToTradeFilters(query);
+  if (mentorMode) filters.mentorMode = true;
   const { whereClause, values } = await TradeQueries._buildWhereClause(userId, filters);
   const filterConditions = whereClause.replace(/^WHERE t\.user_id = \$1/, '');
   return { filterConditions, params: values.slice(1) };
@@ -638,7 +639,7 @@ const CSV_EXPORT_COLUMNS = [
 const analyticsController = {
   async getOverview(req, res, next) {
     try {
-      const filterData = await buildFilterConditions(req.query, req.user.id);
+      const filterData = await buildFilterConditions(req.query, req.user.id, req.isMentor);
 
       // Get user's preference for average vs median calculations
       const User = require('../models/User');
@@ -1206,7 +1207,7 @@ const analyticsController = {
 
   async getMAEMFETrades(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
       const userSettings = await User.getSettings(req.user.id).catch(() => null);
       const breakevenConfig = configFromSettings(userSettings);
@@ -1378,7 +1379,7 @@ const analyticsController = {
           groupBy = 'trade_date';
       }
 
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       // Whole-trade win rate (issue #339): P&L and r-value sums are identical
@@ -1441,7 +1442,7 @@ const analyticsController = {
     try {
       const { limit = 10 } = req.query;
 
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       // Validate and sanitize limit parameter
@@ -1518,7 +1519,7 @@ const analyticsController = {
 
   async getTagStats(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const groupByPosition = await isPositionGroupingEnabled(req.user.id);
@@ -1604,7 +1605,7 @@ const analyticsController = {
 
   async getStrategyStats(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const groupByPosition = await isPositionGroupingEnabled(req.user.id);
@@ -1689,7 +1690,7 @@ const analyticsController = {
 
   async getHourOfDayStats(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       // Get user timezone for proper hour calculation
@@ -1793,7 +1794,7 @@ const analyticsController = {
       // Build filter conditions without date range - dates are handled explicitly in each CTE
       // Using req.query directly avoids adding trade_date filters that exclude trades whose
       // trade_date moved to a different year (e.g. partial exits spanning calendar years)
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       return await sendCachedAnalytics(req, res, 'calendar', {
@@ -1950,7 +1951,7 @@ const analyticsController = {
       // Bucket trades by the user's configured timezone so the day modal matches
       // the calendar overview's cross-midnight handling.
       const userTz = await getUserTimezone(req.user.id);
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams, dateStr, userTz];
       const dateParam = params.length - 1;
       const tzParam = params.length;
@@ -2077,7 +2078,7 @@ const analyticsController = {
       const allowedFormats = ['csv', 'json'];
       const sanitizedFormat = allowedFormats.includes(format) ? format : 'csv';
 
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const exportQuery = `
@@ -2114,7 +2115,7 @@ const analyticsController = {
       }
 
       const responseData = await coalesceInFlight(cacheKey, async () => {
-        const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+        const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
         const params = [req.user.id, ...filterParams];
 
         // Trade Distribution by Price
@@ -2660,7 +2661,7 @@ const analyticsController = {
 
   async getDrawdownAnalysis(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       return await sendCachedAnalytics(req, res, 'drawdown', {
@@ -2768,7 +2769,7 @@ const analyticsController = {
       console.log(`[OK] AI provider configured: ${userSettings.provider}`);
 
       // Use buildFilterConditions for consistency
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const { startDate, endDate } = req.query;
@@ -3008,7 +3009,7 @@ const analyticsController = {
       console.log('[SECTOR] Starting sector performance analysis...');
 
       // Use buildFilterConditions for consistency
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const { startDate, endDate } = req.query;
@@ -3258,7 +3259,7 @@ const analyticsController = {
       console.log('[REFRESH] Refreshing sector performance data...');
 
       // Use buildFilterConditions for consistency
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
 
       const { startDate, endDate } = req.query;
@@ -3408,7 +3409,7 @@ const analyticsController = {
   // so the dashboard doesn't burn AI credits on every refresh.
   async getRecommendationSummary(req, res, next) {
     try {
-      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id);
+      const { filterConditions, params: filterParams } = await buildFilterConditions(req.query, req.user.id, req.isMentor);
       const params = [req.user.id, ...filterParams];
       const filterHashKey = createFilterHash(convertQueryToTradeFilters(req.query));
       const groupByPosition = await isPositionGroupingEnabled(req.user.id);

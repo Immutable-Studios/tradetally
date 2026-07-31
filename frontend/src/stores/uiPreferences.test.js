@@ -13,12 +13,14 @@ vi.mock('@/services/api', () => ({
 }))
 
 describe('ui preferences store', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia())
     api.get.mockReset()
     api.put.mockReset()
     localStorage.clear()
     document.documentElement.className = ''
+    const { setMentorSessionActive } = await import('./uiPreferences')
+    setMentorSessionActive(false)
   })
 
   it('deduplicates concurrent settings hydration', async () => {
@@ -64,5 +66,33 @@ describe('ui preferences store', () => {
         passkey_prompt_dismissed: true
       }
     })
+  })
+
+  it('skips sticky filter hydration for mentor sessions', async () => {
+    const { useUiPreferencesStore, setMentorSessionActive } = await import('./uiPreferences')
+    setMentorSessionActive(true)
+    api.get.mockResolvedValueOnce({
+      data: {
+        settings: {
+          uiPreferences: {
+            tradetally_global_account: '****5119',
+            dashboardCustomEndDate: '2026-07-01',
+            darkMode: true
+          }
+        }
+      }
+    })
+
+    const store = useUiPreferencesStore()
+    await store.init({ mentorSession: true })
+
+    expect(localStorage.getItem('tradetally_global_account')).toBeNull()
+    expect(localStorage.getItem('dashboardCustomEndDate')).toBeNull()
+    expect(localStorage.getItem('darkMode')).toBe('true')
+
+    store.notifyChanged('tradetally_global_account', '****7790')
+    await store.flush()
+    expect(api.put).not.toHaveBeenCalled()
+    setMentorSessionActive(false)
   })
 })
