@@ -16,43 +16,50 @@ const IMPORT_SETTINGS_KEYS = new Set([
  * After a normal authenticate, if the logged-in user is a mentor for an owner,
  * switch req.user to the owner so every downstream query is owner-scoped.
  * The real session identity stays on req.authUser.
+ *
+ * Failures here must never break login — a mentor-table blip should leave the
+ * user on their own account, not return 503 AUTH_UNAVAILABLE.
  */
 async function resolveMentorAccess(req) {
   if (!req.user || req.isMentor) return;
 
-  // Activate any pending invites that match this login email.
   try {
-    await AccountMentor.activateForUser(req.user);
-  } catch (err) {
-    console.warn('[MENTOR] Failed to activate pending invites:', err.message);
-  }
-
-  const grant = await AccountMentor.findActiveForMentorUser(req.user.id);
-  if (!grant) return;
-
-  const owner = await User.findById(grant.owner_user_id);
-  if (!owner || !owner.is_active) return;
-
-  req.authUser = req.user;
-  req.user = owner;
-  req.isMentor = true;
-  req.mentorGrant = grant;
-  req.mentorAccess = {
-    isMentor: true,
-    canChangeImportSettings: false,
-    owner: {
-      id: owner.id,
-      email: owner.email,
-      username: owner.username,
-      fullName: owner.full_name
-    },
-    mentor: {
-      id: req.authUser.id,
-      email: req.authUser.email,
-      username: req.authUser.username,
-      fullName: req.authUser.full_name
+    // Activate any pending invites that match this login email.
+    try {
+      await AccountMentor.activateForUser(req.user);
+    } catch (err) {
+      console.warn('[MENTOR] Failed to activate pending invites:', err.message);
     }
-  };
+
+    const grant = await AccountMentor.findActiveForMentorUser(req.user.id);
+    if (!grant) return;
+
+    const owner = await User.findById(grant.owner_user_id);
+    if (!owner || !owner.is_active) return;
+
+    req.authUser = req.user;
+    req.user = owner;
+    req.isMentor = true;
+    req.mentorGrant = grant;
+    req.mentorAccess = {
+      isMentor: true,
+      canChangeImportSettings: false,
+      owner: {
+        id: owner.id,
+        email: owner.email,
+        username: owner.username,
+        fullName: owner.full_name
+      },
+      mentor: {
+        id: req.authUser.id,
+        email: req.authUser.email,
+        username: req.authUser.username,
+        fullName: req.authUser.full_name
+      }
+    };
+  } catch (err) {
+    console.warn('[MENTOR] Failed to resolve mentor access:', err.message);
+  }
 }
 
 function isMentorRequest(req) {
