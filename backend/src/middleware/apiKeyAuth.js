@@ -4,6 +4,15 @@ const { hasScope, resolveEffectiveScopes } = require('../utils/apiScopes');
 const { isV1Request, sendV1Error } = require('../utils/apiResponse');
 const { TOKEN_PURPOSES, verifyJwtToken, isTokenSessionValid, findActiveUserForAuth } = require('./auth');
 const { AUTH_COOKIE_NAME } = require('../utils/authCookies');
+const { resolveMentorAccess } = require('./mentorAccess');
+
+/** Attach a session user and apply mentor→owner scoping (JWT/cookie paths). */
+async function attachSessionUser(req, user) {
+  req.user = user;
+  req.authUser = user;
+  req.authMethod = 'jwt';
+  await resolveMentorAccess(req);
+}
 
 function sendAuthError(req, res, status, code, message, extra = {}) {
   if (isV1Request(req)) {
@@ -143,8 +152,9 @@ const flexibleAuth = async (req, res, next) => {
         const user = await findActiveUserForAuth(decoded.id || decoded.userId);
 
         if (user && user.is_active && isTokenSessionValid(decoded, user)) {
-          req.user = user;
-          req.authMethod = 'jwt';
+          // Must match authenticate(): mentors need owner-scoped req.user for
+          // /api/trades (flexibleAuth), not only routes that use authenticate.
+          await attachSessionUser(req, user);
           return next();
         }
         // If user not found or inactive, return unauthorized
@@ -167,8 +177,7 @@ const flexibleAuth = async (req, res, next) => {
         const decoded = verifyJwtToken(cookieToken, { requiredPurpose: TOKEN_PURPOSES.ACCESS });
         const user = await findActiveUserForAuth(decoded.id || decoded.userId);
         if (user && user.is_active && isTokenSessionValid(decoded, user)) {
-          req.user = user;
-          req.authMethod = 'jwt';
+          await attachSessionUser(req, user);
           return next();
         }
         return sendAuthError(req, res, 401, 'INVALID_TOKEN', 'Invalid or expired token');
@@ -217,8 +226,7 @@ const flexibleOptionalAuth = async (req, res, next) => {
         const decoded = verifyJwtToken(token, { requiredPurpose: TOKEN_PURPOSES.ACCESS });
         const user = await findActiveUserForAuth(decoded.id || decoded.userId);
         if (user && user.is_active && isTokenSessionValid(decoded, user)) {
-          req.user = user;
-          req.authMethod = 'jwt';
+          await attachSessionUser(req, user);
         }
       } catch (_) { /* fall through unauthenticated */ }
       return next();
@@ -244,8 +252,7 @@ const flexibleOptionalAuth = async (req, res, next) => {
         const decoded = verifyJwtToken(cookieToken, { requiredPurpose: TOKEN_PURPOSES.ACCESS });
         const user = await findActiveUserForAuth(decoded.id || decoded.userId);
         if (user && user.is_active && isTokenSessionValid(decoded, user)) {
-          req.user = user;
-          req.authMethod = 'jwt';
+          await attachSessionUser(req, user);
         }
       } catch (_) { /* fall through unauthenticated */ }
     }
