@@ -1,13 +1,13 @@
 // Mirror of DATA_START_DATE in backend/src/utils/dataStartDate.js.
 //
 // This instance stores no trade history before this date: everything older was
-// purged by migration 239, and the backend rejects any attempt to add more
-// (CSV import, broker sync, API, backup restore, and a CHECK constraint on
-// trades.trade_date). The frontend uses it to floor date pickers and to tell
-// users why older data will not appear.
+// purged (migration 239, then raised by migration 242), and the backend
+// rejects any attempt to add more (CSV import, broker sync, API, backup
+// restore, and a CHECK constraint on trades.trade_date). The frontend uses it
+// to floor date pickers and to tell users why older data will not appear.
 //
 // Keep the two constants in sync — the backend is authoritative.
-export const DATA_START_DATE = '2026-07-25'
+export const DATA_START_DATE = '2026-07-31'
 
 // Rendered form for UI copy. Built from the constant rather than hardcoded
 // twice so the two can't disagree. Parsed as UTC so the day doesn't shift for

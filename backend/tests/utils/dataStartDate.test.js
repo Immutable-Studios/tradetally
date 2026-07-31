@@ -39,8 +39,8 @@ describe('dataStartDate', () => {
     });
 
     it('is true the day before and false the day after', () => {
-      expect(isBeforeDataStart('2026-07-24')).toBe(true);
-      expect(isBeforeDataStart('2026-07-26')).toBe(false);
+      expect(isBeforeDataStart('2026-07-30')).toBe(true);
+      expect(isBeforeDataStart('2026-08-01')).toBe(false);
     });
 
     it('is false for missing or unreadable dates so nothing is silently dropped', () => {
@@ -99,11 +99,11 @@ describe('dataStartDate', () => {
     expect(mirror).toContain(`export const DATA_START_DATE = '${DATA_START_DATE}'`);
   });
 
-  it('stays in sync with the literal purge date in migration 239', () => {
+  it('stays in sync with the literal purge date in migration 242', () => {
     const fs = require('fs');
     const path = require('path');
     const migration = fs.readFileSync(
-      path.join(__dirname, '../../migrations/239_purge_data_before_start_date.sql'),
+      path.join(__dirname, '../../migrations/242_raise_data_start_to_2026_07_31.sql'),
       'utf8'
     );
     // Every date literal in the migration must be the cutoff — a stray date
@@ -114,3 +114,4 @@ describe('dataStartDate', () => {
     expect([...new Set(literals)]).toEqual([DATA_START_DATE]);
   });
 });
+

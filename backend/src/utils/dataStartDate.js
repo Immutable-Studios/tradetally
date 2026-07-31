@@ -1,21 +1,21 @@
 // Global data start date — the hard floor for every trade this instance stores.
 //
-// Trades dated before DATA_START_DATE were purged by migration 239 and can no
-// longer be created: CSV import, broker sync, the API, backup restore and the
-// v2/v3 settings importer all filter against this constant, and the
-// trades_trade_date_on_or_after_start CHECK constraint backstops any path that
-// forgets to. Everything that displays the floor to a user reads it from here
-// (the frontend has a mirror in frontend/src/config/dataStart.js — keep the two
-// in sync).
+// Trades dated before DATA_START_DATE were purged (migration 239, then raised
+// again by migration 242) and can no longer be created: CSV import, broker
+// sync, the API, backup restore and the v2/v3 settings importer all filter
+// against this constant, and the trades_trade_date_on_or_after_start CHECK
+// constraint backstops any path that forgets to. Everything that displays the
+// floor to a user reads it from here (the frontend has a mirror in
+// frontend/src/config/dataStart.js — keep the two in sync).
 //
 // This is deliberately hardcoded rather than configurable: it is a property of
 // this deployment's data, not a user preference. Changing it does NOT resurrect
 // purged history, and lowering it requires dropping the CHECK constraint first.
 
-const DATA_START_DATE = '2026-07-25';
+const DATA_START_DATE = '2026-07-31';
 
 // Human-readable form for API error messages. The frontend formats its own.
-const DATA_START_DATE_LABEL = 'July 25, 2026';
+const DATA_START_DATE_LABEL = 'July 31, 2026';
 
 /**
  * Normalize anything date-ish to a 'YYYY-MM-DD' string, or null when it can't

@@ -12,27 +12,27 @@ describe('DATA_START_DATE', () => {
   })
 
   it('renders a label without shifting the day for users west of UTC', () => {
-    // Parsed as UTC on purpose: a local parse turns 2026-07-25 into July 24
+    // Parsed as UTC on purpose: a local parse turns 2026-07-31 into July 30
     // for anyone in the Americas.
     expect(DATA_START_DATE_LABEL).toContain('2026')
-    expect(DATA_START_DATE_LABEL).toMatch(/July 25, 2026/)
+    expect(DATA_START_DATE_LABEL).toMatch(/July 31, 2026/)
   })
 })
 
 describe('isBeforeDataStart', () => {
   it('flags dates before the cutoff', () => {
-    expect(isBeforeDataStart('2026-07-24')).toBe(true)
+    expect(isBeforeDataStart('2026-07-30')).toBe(true)
     expect(isBeforeDataStart('2024-01-01')).toBe(true)
   })
 
   it('accepts the cutoff itself and later', () => {
     expect(isBeforeDataStart(DATA_START_DATE)).toBe(false)
-    expect(isBeforeDataStart('2026-07-26')).toBe(false)
+    expect(isBeforeDataStart('2026-08-01')).toBe(false)
   })
 
   it('reads the date portion of a timestamp', () => {
-    expect(isBeforeDataStart('2026-07-24T23:59:59Z')).toBe(true)
-    expect(isBeforeDataStart('2026-07-25T00:00:00Z')).toBe(false)
+    expect(isBeforeDataStart('2026-07-30T23:59:59Z')).toBe(true)
+    expect(isBeforeDataStart('2026-07-31T00:00:00Z')).toBe(false)
   })
 
   it('treats empty input as not-before, so a missing date is never dropped', () => {
