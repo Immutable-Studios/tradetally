@@ -29,9 +29,12 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref(null)
   const registrationConfig = ref(null)
   const pendingOnboarding = ref(false)
+  const mentorAccess = ref(null)
   let registrationConfigPromise = null
 
   const isAuthenticated = computed(() => !!token.value)
+  const isMentor = computed(() => Boolean(mentorAccess.value?.isMentor))
+  const canChangeImportSettings = computed(() => !isMentor.value)
   const showOnboardingModal = computed(() => {
     if (!user.value) return false
     return pendingOnboarding.value || !user.value.onboarding_completed
@@ -56,6 +59,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function clearAuthState() {
     user.value = null
+    mentorAccess.value = null
     token.value = null
     setSessionAuthToken(null)
     // Clear the JS-readable csrf_token cookie so the synchronous session hint
@@ -218,6 +222,7 @@ export const useAuthStore = defineStore('auth', () => {
           ...settings
         }
       }
+      mentorAccess.value = response.data.mentorAccess || null
       markAuthenticated(token.value)
 
       // Hydrate cross-device UI preferences from the server. Awaited so any
@@ -486,8 +491,11 @@ export const useAuthStore = defineStore('auth', () => {
     error,
     registrationConfig,
     pendingOnboarding,
+    mentorAccess,
     showOnboardingModal,
     isAuthenticated,
+    isMentor,
+    canChangeImportSettings,
     login,
     register,
     logout,

@@ -14,12 +14,8 @@ name: Daily review email
 # the default production URL.
 
 on:
-  schedule:
-    # 21:15 UTC = 13:15 PST / 14:15 PDT. A single UTC time avoids DST juggling,
-    # and both land after the 13:00 PT US equity cash close, so the review
-    # always covers a settled day. GitHub may delay scheduled runs by a few
-    # minutes under load; nothing here depends on the exact minute.
-    - cron: '15 21 * * *'
+  # Scheduled daily share emails are turned off in favor of mentor mode.
+  # Keep workflow_dispatch so a human can still trigger a one-off batch if needed.
   workflow_dispatch:
     inputs:
       force:

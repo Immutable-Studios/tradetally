@@ -4,6 +4,7 @@ const billingController = require('../controllers/billing.controller');
 const { authenticate } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validation');
 const { createRateLimiter } = require('../utils/rateLimit');
+const { forbidMentorAccountChanges } = require('../middleware/mentorAccess');
 
 const billingLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -25,18 +26,18 @@ router.post('/webhooks/stripe', rawBodyMiddleware, billingController.handleWebho
 router.use(authenticate); // Apply auth middleware to all routes below
 
 router.get('/subscription', billingController.getSubscription);
-router.post('/checkout', billingLimiter, validate(schemas.billingCheckout), billingController.createCheckoutSession);
-router.post('/trial', billingLimiter, billingController.startTrial);
-router.post('/portal', billingLimiter, billingController.createPortalSession);
-router.post('/cancel', billingLimiter, validate(schemas.billingCancelSubscription), billingController.cancelSubscription);
-router.post('/reactivate', billingLimiter, billingController.reactivateSubscription);
+router.post('/checkout', forbidMentorAccountChanges, billingLimiter, validate(schemas.billingCheckout), billingController.createCheckoutSession);
+router.post('/trial', forbidMentorAccountChanges, billingLimiter, billingController.startTrial);
+router.post('/portal', forbidMentorAccountChanges, billingLimiter, billingController.createPortalSession);
+router.post('/cancel', forbidMentorAccountChanges, billingLimiter, validate(schemas.billingCancelSubscription), billingController.cancelSubscription);
+router.post('/reactivate', forbidMentorAccountChanges, billingLimiter, billingController.reactivateSubscription);
 router.get('/checkout/:sessionId', billingController.getCheckoutSession);
 
 // Apple In-App Purchase routes
-router.post('/apple/verify', billingLimiter, validate(schemas.billingAppleReceipt), billingController.verifyAppleReceipt);
+router.post('/apple/verify', forbidMentorAccountChanges, billingLimiter, validate(schemas.billingAppleReceipt), billingController.verifyAppleReceipt);
 
 // Debug endpoints (development only)
-router.delete('/debug/reset-trial', billingController.debugResetTrial);
+router.delete('/debug/reset-trial', forbidMentorAccountChanges, billingController.debugResetTrial);
 
 // Admin routes (temporarily commented out - needs admin auth middleware)
 // router.get('/config', adminAuth, billingController.getBillingConfig);

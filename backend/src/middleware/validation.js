@@ -118,6 +118,7 @@ const schemas = {
     password: Joi.string().min(8).required(),
     fullName: Joi.string().max(255).allow(''),
     marketing_consent: Joi.boolean().default(false),
+    mentorInvite: Joi.string().hex().length(64).optional(),
     utm_source: Joi.string().max(255).allow('', null),
     utm_medium: Joi.string().max(255).allow('', null),
     utm_campaign: Joi.string().max(255).allow('', null),

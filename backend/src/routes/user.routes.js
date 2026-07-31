@@ -3,6 +3,7 @@ const router = express.Router();
 const userController = require('../controllers/user.controller');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { forbidMentorAccountChanges } = require('../middleware/mentorAccess');
 
 /**
  * @swagger
@@ -48,9 +49,9 @@ const upload = require('../middleware/upload');
  *         description: Profile updated successfully
  */
 router.get('/profile', authenticate, userController.getProfile);
-router.put('/profile', authenticate, userController.updateProfile);
-router.post('/onboarding-completed', authenticate, userController.markOnboardingCompleted);
-router.post('/onboarding-step', authenticate, userController.setOnboardingStep);
+router.put('/profile', authenticate, forbidMentorAccountChanges, userController.updateProfile);
+router.post('/onboarding-completed', authenticate, forbidMentorAccountChanges, userController.markOnboardingCompleted);
+router.post('/onboarding-step', authenticate, forbidMentorAccountChanges, userController.setOnboardingStep);
 router.get('/onboarding-status', authenticate, userController.getOnboardingStatus);
 
 /**
@@ -83,8 +84,8 @@ router.get('/onboarding-status', authenticate, userController.getOnboardingStatu
  *       200:
  *         description: Avatar deleted successfully
  */
-router.post('/avatar', authenticate, upload.single('avatar'), userController.uploadAvatar);
-router.delete('/avatar', authenticate, userController.deleteAvatar);
+router.post('/avatar', authenticate, forbidMentorAccountChanges, upload.single('avatar'), userController.uploadAvatar);
+router.delete('/avatar', authenticate, forbidMentorAccountChanges, userController.deleteAvatar);
 // Public serving endpoint — avatars are shown on public profile pages, so no
 // auth required to fetch one (anyone with the URL can view it, as with any
 // avatar system). Filename is sanitized in the controller.
@@ -115,7 +116,7 @@ router.get('/avatar/:filename', userController.getAvatar);
  *       200:
  *         description: Password changed successfully
  */
-router.put('/password', authenticate, userController.changePassword);
+router.put('/password', authenticate, forbidMentorAccountChanges, userController.changePassword);
 
 /**
  * @swagger

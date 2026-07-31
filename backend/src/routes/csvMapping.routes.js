@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const csvMappingController = require('../controllers/csvMapping.controller');
 const { authenticate } = require('../middleware/auth');
+const { forbidMentorImportChanges } = require('../middleware/mentorAccess');
 
 // All routes require authentication
 router.use(authenticate);
@@ -13,13 +14,13 @@ router.get('/', csvMappingController.getUserMappings);
 router.get('/:id', csvMappingController.getMappingById);
 
 // Create a new CSV mapping
-router.post('/', csvMappingController.createMapping);
+router.post('/', forbidMentorImportChanges, csvMappingController.createMapping);
 
 // Update a CSV mapping
-router.put('/:id', csvMappingController.updateMapping);
+router.put('/:id', forbidMentorImportChanges, csvMappingController.updateMapping);
 
 // Delete a CSV mapping
-router.delete('/:id', csvMappingController.deleteMapping);
+router.delete('/:id', forbidMentorImportChanges, csvMappingController.deleteMapping);
 
 // Record usage of a CSV mapping
 router.post('/:id/record-usage', csvMappingController.recordMappingUsage);

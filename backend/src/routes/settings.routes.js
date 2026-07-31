@@ -4,6 +4,10 @@ const multer = require('multer');
 const settingsController = require('../controllers/settings.controller');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validation');
+const {
+  rejectMentorImportSettingsBody,
+  forbidMentorImportChanges
+} = require('../middleware/mentorAccess');
 
 function isJsonUpload(file) {
   const filename = file?.originalname?.toLowerCase?.() || '';
@@ -26,7 +30,7 @@ const upload = multer({
 });
 
 router.get('/', authenticate, settingsController.getSettings);
-router.put('/', authenticate, validate(schemas.updateSettings), settingsController.updateSettings);
+router.put('/', authenticate, rejectMentorImportSettingsBody, validate(schemas.updateSettings), settingsController.updateSettings);
 router.get('/tags', authenticate, settingsController.getTags);
 router.post('/tags', authenticate, settingsController.createTag);
 router.put('/tags/:id', authenticate, settingsController.updateTag);
@@ -38,7 +42,7 @@ router.put('/ai-provider', authenticate, settingsController.updateAIProviderSett
 router.get('/cusip-ai-provider', authenticate, settingsController.getCusipAIProviderSettings);
 router.put('/cusip-ai-provider', authenticate, settingsController.updateCusipAIProviderSettings);
 router.get('/export', authenticate, settingsController.exportUserData);
-router.post('/import', authenticate, upload.single('file'), settingsController.importUserData);
+router.post('/import', authenticate, forbidMentorImportChanges, upload.single('file'), settingsController.importUserData);
 
 // Admin Settings Routes
 router.get('/admin/ai', authenticate, settingsController.getAdminAISettings);

@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { isV1Request, sendV1Error } = require('../utils/apiResponse');
 const { AUTH_COOKIE_NAME, clearAuthCookies } = require('../utils/authCookies');
+const { resolveMentorAccess } = require('./mentorAccess');
 
 const TOKEN_PURPOSES = Object.freeze({
   ACCESS: 'access',
@@ -137,11 +138,15 @@ const authenticate = async (req, res, next) => {
 
     // Add device tracking headers to request
     req.user = user;
+    req.authUser = user;
     req.token = token;
     req.authSource = source;
     req.deviceId = req.headers['x-device-id'];
     req.userAgent = req.headers['user-agent'];
-    
+
+    // Mentors operate on the owner's data for the rest of the request.
+    await resolveMentorAccess(req);
+
     next();
   } catch (error) {
     // Genuine auth failures (bad/expired/missing token, unknown user) mean the
@@ -206,8 +211,10 @@ const optionalAuth = async (req, res, next) => {
 
       if (user && user.is_active && isTokenSessionValid(decoded, user)) {
         req.user = user;
+        req.authUser = user;
         req.token = token;
         req.authSource = source;
+        await resolveMentorAccess(req);
       }
     }
     next();
@@ -218,6 +225,14 @@ const optionalAuth = async (req, res, next) => {
 
 function authorizeAdmin(req, res, next) {
   try {
+    // Mentors inherit the owner's data scope but never admin privileges.
+    if (req.isMentor) {
+      if (isV1Request(req)) {
+        return sendV1Error(res, 403, 'FORBIDDEN', 'Admin access required');
+      }
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
     if (!['admin', 'owner'].includes(req.user.role)) {
       if (isV1Request(req)) {
         return sendV1Error(res, 403, 'FORBIDDEN', 'Admin access required');

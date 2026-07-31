@@ -64,6 +64,7 @@ const supportRoutes = require('./routes/support.routes');
 const internalRoutes = require('./routes/internal.routes');
 const edgeReportRoutes = require('./routes/edgeReport.routes');
 const dailyReviewShareRoutes = require('./routes/dailyReviewShare.routes');
+const mentorRoutes = require('./routes/mentor.routes');
 const replayRoutes = require('./routes/replay.routes');
 const backtestRoutes = require('./routes/backtest.routes');
 const propFirmRoutes = require('./routes/propFirm.routes');
@@ -319,6 +320,7 @@ app.use('/api/edge-reports', edgeReportRoutes);
 // Public, unauthenticated: token grants read-only access to one day's Daily
 // Review for the token's own owner only (see dailyShareAuth middleware).
 app.use('/api/public/daily-review', dailyReviewShareRoutes);
+app.use('/api/mentors', mentorRoutes);
 app.use('/api/replay', replayRoutes);
 app.use('/api/backtest', backtestRoutes);
 app.use('/api/prop-firm', propFirmRoutes);
@@ -749,14 +751,14 @@ function scheduleBackgroundServices(backgroundJobsDisabled) {
 
   if (backgroundJobsDisabled) {
     console.log('Daily review email scheduler disabled (DISABLE_BACKGROUND_JOBS=true)');
-  } else if (process.env.ENABLE_DAILY_REVIEW_EMAIL !== 'false') {
+  } else if (process.env.ENABLE_DAILY_REVIEW_EMAIL === 'true') {
     defer('daily-review-email-scheduler', () => {
       console.log('Starting daily review email scheduler...');
       dailyReviewEmailScheduler.start();
       console.log('[SUCCESS] Daily review email scheduler started');
     });
   } else {
-    console.log('Daily review email scheduler disabled (ENABLE_DAILY_REVIEW_EMAIL=false)');
+    console.log('Daily review email scheduler disabled (ENABLE_DAILY_REVIEW_EMAIL!=true)');
   }
 
   if (backgroundJobsDisabled) {

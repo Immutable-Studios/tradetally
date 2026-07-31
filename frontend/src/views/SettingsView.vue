@@ -1197,8 +1197,8 @@
                     </div>
                 </div>
 
-                <!-- Trade Import Settings -->
-                <div class="card">
+                <!-- Trade Import Settings (owner only) -->
+                <div v-if="authStore.canChangeImportSettings" class="card">
                     <div class="card-body">
                         <h3
                             class="text-lg font-medium text-gray-900 dark:text-white mb-6"
@@ -1427,6 +1427,77 @@
                 </div>
             </template>
 
+            <!-- Mentors Tab -->
+            <template v-if="activeTab === 'mentors' && !authStore.isMentor">
+                <div class="card">
+                    <div class="card-body">
+                        <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                            Mentors
+                        </h3>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                            Add a mentor by email. When they sign in, they can view and use your journal.
+                            Import settings stay locked for them.
+                        </p>
+
+                        <form @submit.prevent="inviteMentor" class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                            <div class="flex-1">
+                                <label for="mentorEmail" class="label">Mentor email</label>
+                                <input
+                                    id="mentorEmail"
+                                    v-model="mentorInviteEmail"
+                                    type="email"
+                                    required
+                                    class="input"
+                                    placeholder="mentor@example.com"
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                class="btn-primary"
+                                :disabled="mentorInviteLoading"
+                            >
+                                <span v-if="mentorInviteLoading">Adding...</span>
+                                <span v-else>Add mentor</span>
+                            </button>
+                        </form>
+
+                        <div v-if="mentorsLoading" class="mt-6 text-sm text-gray-500 dark:text-gray-400">
+                            Loading mentors...
+                        </div>
+                        <ul v-else-if="mentors.length" class="mt-6 divide-y divide-gray-100 dark:divide-gray-700">
+                            <li
+                                v-for="mentor in mentors"
+                                :key="mentor.id"
+                                class="flex items-center justify-between gap-4 py-3"
+                            >
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-medium text-gray-900 dark:text-white">
+                                        {{ mentor.email }}
+                                    </p>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                                        {{ mentor.status === 'active' ? 'Active' : 'Pending invite' }}
+                                        <span v-if="mentor.fullName || mentor.username">
+                                            · {{ mentor.fullName || mentor.username }}
+                                        </span>
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="btn-outline text-sm"
+                                    :disabled="mentorRevokingId === mentor.id"
+                                    @click="revokeMentor(mentor)"
+                                >
+                                    Remove
+                                </button>
+                            </li>
+                        </ul>
+                        <p v-else class="mt-6 text-sm text-gray-500 dark:text-gray-400">
+                            No mentors yet.
+                        </p>
+                    </div>
+                </div>
+            </template>
+
             <!-- Data Management Tab -->
             <template v-if="activeTab === 'data'">
                 <DataExportImport
@@ -1492,6 +1563,10 @@ const tabs = computed(() => {
         { id: "data", label: "Data Management" },
     ];
 
+    if (!authStore.isMentor) {
+        baseTabs.push({ id: "mentors", label: "Mentors" });
+    }
+
     // Add System Logs tab for admin users
     if (authStore.user?.role === "admin") {
         baseTabs.push({ id: "admin", label: "System Logs" });
@@ -1499,6 +1574,67 @@ const tabs = computed(() => {
 
     return baseTabs;
 });
+
+const mentors = ref([]);
+const mentorsLoading = ref(false);
+const mentorInviteEmail = ref("");
+const mentorInviteLoading = ref(false);
+const mentorRevokingId = ref(null);
+
+async function loadMentors() {
+    if (authStore.isMentor) return;
+    mentorsLoading.value = true;
+    try {
+        const { data } = await api.get("/mentors");
+        mentors.value = data.mentors || [];
+    } catch (err) {
+        console.error("Failed to load mentors:", err);
+    } finally {
+        mentorsLoading.value = false;
+    }
+}
+
+async function inviteMentor() {
+    mentorInviteLoading.value = true;
+    try {
+        const { data } = await api.post("/mentors", {
+            email: mentorInviteEmail.value.trim(),
+        });
+        showSuccess("Mentor added", data.message || "Mentor invited");
+        mentorInviteEmail.value = "";
+        await loadMentors();
+    } catch (err) {
+        showError(
+            "Could not add mentor",
+            err.response?.data?.error || "Failed to add mentor"
+        );
+    } finally {
+        mentorInviteLoading.value = false;
+    }
+}
+
+function revokeMentor(mentor) {
+    showDangerConfirmation(
+        "Remove mentor",
+        `Remove access for ${mentor.email}? They will no longer be able to view your journal.`,
+        async () => {
+            mentorRevokingId.value = mentor.id;
+            try {
+                await api.delete(`/mentors/${mentor.id}`);
+                showSuccess("Mentor removed", `${mentor.email} no longer has access`);
+                await loadMentors();
+            } catch (err) {
+                showError(
+                    "Could not remove mentor",
+                    err.response?.data?.error || "Failed to remove mentor"
+                );
+            } finally {
+                mentorRevokingId.value = null;
+            }
+        },
+        { confirmText: "Remove" }
+    );
+}
 
 // AI Provider Settings
 const aiForm = ref({
@@ -2519,6 +2655,7 @@ onMounted(() => {
     loadAllSettings();
     loadBrokerFeeSettings();
     fetchQualityWeights();
+    loadMentors();
 
     // Load admin AI settings if user is admin
     if (authStore.user?.role === "admin") {

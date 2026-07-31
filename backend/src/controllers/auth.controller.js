@@ -82,11 +82,25 @@ function queuePasswordResetEmail(email, token) {
 const authController = {
   async register(req, res, next) {
     try {
-      const { email, username: providedUsername, password, fullName, marketing_consent } = req.body;
+      const { email, username: providedUsername, password, fullName, marketing_consent, mentorInvite } = req.body;
+      const AccountMentor = require('../models/AccountMentor');
+      const { normalizeEmail } = require('../utils/normalizeEmail');
+
+      // Mentor invites may register even when public registration is disabled.
+      let mentorInviteRow = null;
+      if (mentorInvite) {
+        mentorInviteRow = await AccountMentor.findByInviteToken(mentorInvite);
+        if (!mentorInviteRow) {
+          return res.status(400).json({ error: 'This mentor invite is invalid or has already been used' });
+        }
+        if (normalizeEmail(email) !== normalizeEmail(mentorInviteRow.mentor_email)) {
+          return res.status(400).json({ error: 'Register with the email address that was invited' });
+        }
+      }
 
       // Check registration mode
       const registrationMode = getRegistrationMode();
-      if (registrationMode === 'disabled') {
+      if (registrationMode === 'disabled' && !mentorInviteRow) {
         return res.status(403).json({
           error: 'User registration is currently disabled. Please contact an administrator.',
           registrationMode: 'disabled'
@@ -154,6 +168,14 @@ const authController = {
       });
       await User.createSettings(user.id);
 
+      if (mentorInviteRow) {
+        try {
+          await AccountMentor.activateByToken(mentorInvite, user);
+        } catch (mentorErr) {
+          console.warn('[REGISTER] Mentor invite activation failed:', mentorErr.message);
+        }
+      }
+
       // Record acquisition data (UTM params, referral source, IP, user agent)
       try {
         const db = require('../config/database');
@@ -170,7 +192,7 @@ const authController = {
           utm_term || null,
           utm_content || null,
           referral_source || req.headers.referer || null,
-          'direct',
+          mentorInviteRow ? 'mentor_invite' : 'direct',
           landing_page || null,
           (marketing_consent) ? getClientIp(req) : null,
           (marketing_consent) ? (req.headers['user-agent'] || null) : null
@@ -181,7 +203,7 @@ const authController = {
 
       // Track registration event
       activityTrackingService.trackEvent(user.id, 'auth.register', 'auth', {
-        registration_method: 'direct',
+        registration_method: mentorInviteRow ? 'mentor_invite' : 'direct',
         has_utm: !!(req.body.utm_source || req.body.utm_campaign)
       }, {
         ip: getClientIp(req),
@@ -192,6 +214,7 @@ const authController = {
       // For new users on billing-enabled instances: seed sample data and grant
       // a 14-day Pro trial. Both are best-effort and never block registration.
       // First user is skipped — they're an admin and get Pro tier permanently.
+      // Mentor invitees skip this — they use the owner's journal, not their own.
       let billingEnabled = false;
       try {
         billingEnabled = await TierService.isBillingEnabled(req.headers.host);
@@ -200,7 +223,7 @@ const authController = {
         console.log('[REGISTER] Billing status check failed (non-blocking):', billingErr.message);
       }
 
-      if (billingEnabled && !isFirstUser) {
+      if (billingEnabled && !isFirstUser && !mentorInviteRow) {
         try {
           await SampleDataService.createForUser(user.id);
           console.log(`[REGISTER] Sample data created for new user ${user.username}`);
@@ -562,6 +585,9 @@ const authController = {
       ]);
       const onboardingCompleted = !!(settings && settings.onboarding_completed_at);
 
+      // Mentors see the owner's journal data, but never surface as admin/owner.
+      const effectiveRole = req.isMentor ? 'user' : user.role;
+
       res.json({
         user: {
           id: user.id,
@@ -569,7 +595,7 @@ const authController = {
           username: user.username,
           fullName: user.full_name,
           avatarUrl: user.avatar_url,
-          role: user.role,
+          role: effectiveRole,
           tier: req.user.tier, // Use effective tier from middleware
           isVerified: user.is_verified,
           adminApproved: user.admin_approved,
@@ -580,7 +606,8 @@ const authController = {
           onboarding_step: (settings && settings.onboarding_step) || 0,
           pro_onboarding_step: (settings && settings.pro_onboarding_step) || 0
         },
-        settings
+        settings,
+        mentorAccess: req.mentorAccess || null
       });
     } catch (error) {
       next(error);

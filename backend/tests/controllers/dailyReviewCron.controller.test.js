@@ -102,7 +102,18 @@ describe('dailyReviewCronController.runDailyBatch', () => {
 });
 
 describe('dailyReviewCronController.getStatus', () => {
+  const originalFlag = process.env.ENABLE_DAILY_REVIEW_EMAIL;
+
+  afterEach(() => {
+    if (originalFlag === undefined) {
+      delete process.env.ENABLE_DAILY_REVIEW_EMAIL;
+    } else {
+      process.env.ENABLE_DAILY_REVIEW_EMAIL = originalFlag;
+    }
+  });
+
   it('reports the configured schedule', async () => {
+    process.env.ENABLE_DAILY_REVIEW_EMAIL = 'true';
     const res = mockRes();
 
     await controller.getStatus({}, res);
@@ -111,6 +122,17 @@ describe('dailyReviewCronController.getStatus', () => {
       running: false,
       cron: expect.any(String),
       schedulerEnabled: true
+    }));
+  });
+
+  it('reports the scheduler as disabled by default', async () => {
+    delete process.env.ENABLE_DAILY_REVIEW_EMAIL;
+    const res = mockRes();
+
+    await controller.getStatus({}, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      schedulerEnabled: false
     }));
   });
 });

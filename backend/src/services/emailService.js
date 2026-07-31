@@ -423,6 +423,81 @@ class EmailService {
     }
   }
 
+  static async sendMentorInviteEmail(email, { ownerName, ownerEmail, inviteToken, alreadyRegistered }) {
+    if (!this.isConfigured()) {
+      console.log('Email not configured, skipping mentor invite email');
+      return;
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const actionUrl = alreadyRegistered
+      ? `${frontendUrl}/login`
+      : `${frontendUrl}/register?mentorInvite=${encodeURIComponent(inviteToken || '')}&email=${encodeURIComponent(email)}`;
+    const actionLabel = alreadyRegistered ? 'Sign in to TradeTally' : 'Create your account';
+    const bodyCopy = alreadyRegistered
+      ? `${ownerName} (${ownerEmail}) added you as a mentor on their TradeTally journal. Sign in with this email to view their trades and analytics.`
+      : `${ownerName} (${ownerEmail}) invited you as a mentor on their TradeTally journal. Create an account with this email to get access.`;
+
+    const content = `
+      <h1 style="color: #18181b; font-size: 22px; margin: 0 0 8px 0; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        You've been invited as a mentor
+      </h1>
+      <p style="color: #71717a; font-size: 15px; line-height: 1.6; margin: 0 0 28px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        ${bodyCopy}
+      </p>
+
+      <div style="text-align: center; margin: 0 0 28px 0;">
+        <a href="${actionUrl}" style="${this.getButtonStyle()}">
+          ${actionLabel}
+        </a>
+      </div>
+
+      <p style="color: #a1a1aa; font-size: 13px; line-height: 1.5; margin: 0 0 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        Mentors can review the full journal but cannot change import settings.
+      </p>
+    `;
+
+    const mailOptions = {
+      from: {
+        name: 'TradeTally',
+        address: process.env.EMAIL_FROM || 'noreply@tradetally.io'
+      },
+      to: email,
+      subject: `${ownerName} invited you as a TradeTally mentor`,
+      html: this.getBaseTemplate('Mentor invite', content),
+      text: `${bodyCopy}\n\n${actionUrl}`,
+      headers: {
+        'X-Entity-Ref-ID': `mentor-invite-${Date.now()}`,
+        'Message-ID': `<mentor-invite-${Date.now()}@tradetally.io>`
+      }
+    };
+
+    try {
+      await this.sendMail(mailOptions);
+      console.log('Mentor invite email sent to:', maskEmail(email));
+      await this.logEmail({
+        recipient: email,
+        subject: mailOptions.subject,
+        emailType: 'mentor_invite',
+        htmlBody: mailOptions.html || null,
+        textBody: mailOptions.text,
+        status: 'sent'
+      });
+    } catch (error) {
+      console.error('Failed to send mentor invite email:', error);
+      await this.logEmail({
+        recipient: email,
+        subject: mailOptions.subject,
+        emailType: 'mentor_invite',
+        htmlBody: mailOptions.html || null,
+        textBody: mailOptions.text,
+        status: 'failed',
+        errorMessage: error.message
+      });
+      throw error;
+    }
+  }
+
   static async sendPasswordResetEmail(email, token) {
     if (!this.isConfigured()) {
       console.log('Email not configured, skipping password reset email');

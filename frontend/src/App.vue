@@ -21,6 +21,7 @@
     <template v-else>
     <UpdateBanner v-if="!isAuthRoute" />
     <EmailVerificationBanner v-if="!isAuthRoute" />
+    <MentorAccessBanner v-if="!isAuthRoute" />
     <IOSAppBanner v-if="!isAuthRoute" />
 
     <!-- Authenticated layout: sidebar fixed left, content offset right -->
@@ -178,6 +179,7 @@ import ModalAlert from '@/components/common/ModalAlert.vue'
 import CelebrationOverlay from '@/components/gamification/CelebrationOverlay.vue'
 import UpdateBanner from '@/components/common/UpdateBanner.vue'
 import EmailVerificationBanner from '@/components/common/EmailVerificationBanner.vue'
+import MentorAccessBanner from '@/components/common/MentorAccessBanner.vue'
 import IOSAppBanner from '@/components/common/IOSAppBanner.vue'
 import VersionDisplay from '@/components/common/VersionDisplay.vue'
 import CookieConsentBanner from '@/components/common/CookieConsentBanner.vue'
@@ -276,7 +278,7 @@ const PASSKEY_PROMPT_DISMISSED_KEY = 'passkey_prompt_dismissed'
 let previousSessionState = authStore.isAuthenticated
 watch(() => authStore.isAuthenticated, async (isAuthenticated) => {
   if (isAuthenticated && !previousSessionState) {
-    if (localStorage.getItem(PASSKEY_PROMPT_DISMISSED_KEY)) {
+    if (localStorage.getItem(PASSKEY_PROMPT_DISMISSED_KEY) || authStore.isMentor) {
       previousSessionState = isAuthenticated
       return
     }
@@ -286,7 +288,7 @@ watch(() => authStore.isAuthenticated, async (isAuthenticated) => {
         if (!uiPreferencesStore.initialized) {
           await uiPreferencesStore.init()
         }
-        if (localStorage.getItem(PASSKEY_PROMPT_DISMISSED_KEY)) {
+        if (localStorage.getItem(PASSKEY_PROMPT_DISMISSED_KEY) || authStore.isMentor) {
           return
         }
         const res = await api.get('/auth/passkey')

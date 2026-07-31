@@ -525,16 +525,20 @@ const navItems = computed(() => {
       ]
     },
     { name: 'Daily', icon: CalendarDaysIcon, to: '/daily', route: 'daily' },
-    { name: 'Calendar', icon: CalendarIcon, to: '/calendar', route: 'calendar' },
-    {
+    { name: 'Calendar', icon: CalendarIcon, to: '/calendar', route: 'calendar' }
+  ]
+
+  // Mentors can use the journal but cannot change import settings / pipeline.
+  if (!authStore.isMentor) {
+    items.push({
       name: 'Import',
       icon: ArrowUpTrayIcon,
       items: [
         { name: 'CSV Import', to: '/import', route: 'import' },
         { name: 'Broker Sync', to: '/broker-sync', route: 'broker-sync' }
       ]
-    }
-  ]
+    })
+  }
 
   return items
 })

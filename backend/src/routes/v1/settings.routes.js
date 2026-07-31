@@ -3,10 +3,11 @@ const router = express.Router();
 const settingsV1Controller = require('../../controllers/v1/settings.controller');
 const { authenticate } = require('../../middleware/auth');
 const { validate, schemas } = require('../../middleware/validation');
+const { rejectMentorImportSettingsBody } = require('../../middleware/mentorAccess');
 
 // Enhanced settings for mobile
 router.get('/', authenticate, settingsV1Controller.getSettings);
-router.put('/', authenticate, validate(schemas.settings), settingsV1Controller.updateSettings);
+router.put('/', authenticate, rejectMentorImportSettingsBody, validate(schemas.settings), settingsV1Controller.updateSettings);
 
 // Mobile-specific settings
 router.get('/mobile', authenticate, settingsV1Controller.getMobileSettings);

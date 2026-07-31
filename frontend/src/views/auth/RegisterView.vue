@@ -31,8 +31,8 @@
         </p>
       </div>
 
-      <!-- Registration disabled message -->
-      <div v-if="registrationDisabled" class="rounded-md bg-yellow-50 dark:bg-yellow-900/20 p-4">
+      <!-- Registration disabled message (mentor invites may still register) -->
+      <div v-if="registrationDisabled && !mentorInvite" class="rounded-md bg-yellow-50 dark:bg-yellow-900/20 p-4">
         <div class="text-center">
           <h3 class="text-lg font-medium text-yellow-800 dark:text-yellow-400 mb-2">
             Registration Currently Disabled
@@ -47,8 +47,14 @@
           </div>
         </div>
       </div>
+
+      <div v-if="mentorInvite" class="rounded-md bg-sky-50 dark:bg-sky-900/20 p-4">
+        <p class="text-sm text-sky-800 dark:text-sky-200">
+          You've been invited as a mentor. Create an account with the invited email to access their journal.
+        </p>
+      </div>
       
-      <form v-if="!registrationDisabled" class="mt-8 space-y-6" @submit.prevent="handleRegister">
+      <form v-if="!registrationDisabled || mentorInvite" class="mt-8 space-y-6" @submit.prevent="handleRegister">
         <div class="space-y-4">
           <div>
             <label for="email" class="label">Email address</label>
@@ -149,7 +155,10 @@ const form = ref({
 
 // Capture UTM parameters from URL for acquisition tracking
 const utmParams = ref({})
-
+const mentorInvite = computed(() => {
+  const token = route.query.mentorInvite
+  return typeof token === 'string' && token.length > 0 ? token : null
+})
 
 const registrationDisabled = computed(() => registrationConfig.value?.allowRegistration === false)
 const billingEnabled = computed(() => registrationConfig.value?.billingEnabled === true)
@@ -185,7 +194,7 @@ watch(registrationDisabled, (isDisabled) => {
     redirectTimeoutId = null
   }
 
-  if (isDisabled) {
+  if (isDisabled && !mentorInvite.value) {
     redirectTimeoutId = setTimeout(() => {
       router.push('/login')
     }, 5000)
@@ -200,7 +209,11 @@ onUnmounted(() => {
 
 async function handleRegister() {
   try {
-    const response = await authStore.register({ ...form.value, ...utmParams.value })
+    const payload = { ...form.value, ...utmParams.value }
+    if (mentorInvite.value) {
+      payload.mentorInvite = mentorInvite.value
+    }
+    const response = await authStore.register(payload)
 
     // If auto-logged in (token returned), the store already navigated to dashboard
     if (response.token) {

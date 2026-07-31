@@ -6,6 +6,7 @@ const { authenticate } = require('../../middleware/auth');
 const { flexibleAuth, requireApiScope } = require('../../middleware/apiKeyAuth');
 const { idempotencyMiddleware } = require('../../middleware/idempotency');
 const { validate, schemas } = require('../../middleware/validation');
+const { forbidMentorImportChanges } = require('../../middleware/mentorAccess');
 
 /**
  * @swagger
@@ -229,7 +230,7 @@ router.put('/bulk', flexibleAuth, requireApiScope('trades:write'), tradeV1Contro
 router.delete('/bulk', flexibleAuth, requireApiScope('trades:write'), tradeV1Controller.bulkDeleteTrades);
 
 // Import/Export (JWT only - internal app use)
-router.post('/import', authenticate, tradeController.importTrades);
+router.post('/import', authenticate, forbidMentorImportChanges, tradeController.importTrades);
 router.get('/export', authenticate, tradeController.exportTrades);
 
 /**

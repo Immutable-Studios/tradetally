@@ -8,6 +8,7 @@ const multer = require('multer');
 const imageUpload = require('../middleware/upload');
 const { requiresTier } = require('../middleware/tierAuth');
 const { createRateLimiter } = require('../utils/rateLimit');
+const { forbidMentorImportChanges } = require('../middleware/mentorAccess');
 
 /**
  * @swagger
@@ -545,10 +546,10 @@ router.get('/import/requirements', authenticate, tradeController.checkImportRequ
  *                 rowCount:
  *                   type: integer
  */
-router.post('/import/validate', authenticate, importLimiter, upload.single('file'), tradeController.validateImportFile);
+router.post('/import/validate', authenticate, forbidMentorImportChanges, importLimiter, upload.single('file'), tradeController.validateImportFile);
 
-router.post('/import', authenticate, importLimiter, upload.single('file'), tradeController.importTrades);
-router.post('/import/manual-review', authenticate, importLimiter, tradeController.resolveManualReviewTrades);
+router.post('/import', authenticate, forbidMentorImportChanges, importLimiter, upload.single('file'), tradeController.importTrades);
+router.post('/import/manual-review', authenticate, forbidMentorImportChanges, importLimiter, tradeController.resolveManualReviewTrades);
 
 /**
  * @swagger
@@ -602,8 +603,8 @@ router.get('/import/history', authenticate, tradeController.getImportHistory);
  *       200:
  *         description: Import deleted successfully
  */
-router.delete('/import/bulk', authenticate, importLimiter, tradeController.bulkDeleteImports);
-router.delete('/import/:importId', authenticate, importLimiter, tradeController.deleteImport);
+router.delete('/import/bulk', authenticate, forbidMentorImportChanges, importLimiter, tradeController.bulkDeleteImports);
+router.delete('/import/:importId', authenticate, forbidMentorImportChanges, importLimiter, tradeController.deleteImport);
 router.get('/import/logs', authenticate, tradeController.getImportLogs);
 router.get('/import/logs/:filename', authenticate, tradeController.getLogFile);
 router.get('/cusip/resolution-status', authenticate, tradeController.getCusipResolutionStatus);

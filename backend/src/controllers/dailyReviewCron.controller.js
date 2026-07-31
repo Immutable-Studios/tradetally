@@ -75,7 +75,7 @@ const dailyReviewCronController = {
       running: inFlight !== null,
       cron: process.env.DAILY_REVIEW_EMAIL_CRON || '15 13 * * *',
       timezone: process.env.DAILY_REVIEW_EMAIL_TZ || process.env.TZ || 'America/Los_Angeles',
-      schedulerEnabled: process.env.ENABLE_DAILY_REVIEW_EMAIL !== 'false'
+      schedulerEnabled: process.env.ENABLE_DAILY_REVIEW_EMAIL === 'true'
     });
   }
 };
