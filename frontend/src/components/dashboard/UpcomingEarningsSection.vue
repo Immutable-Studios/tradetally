@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div v-if="isConfigured" class="card">
     <div class="card-body">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-medium text-gray-900 dark:text-white">Upcoming Earnings</h3>
@@ -138,9 +138,12 @@ const props = defineProps({
   }
 })
 
+const emit = defineEmits(['unavailable'])
+
 const earnings = ref([])
 const loading = ref(false)
 const error = ref(null)
+const isConfigured = ref(true)
 
 const formatEarningsDate = (dateStr) => {
   const date = new Date(dateStr)
@@ -154,6 +157,41 @@ const formatEarningsDate = (dateStr) => {
 const formatNumber = (num) => {
   if (num === null || num === undefined) return '0.00'
   return parseFloat(num).toFixed(2)
+}
+
+const markUnavailable = () => {
+  isConfigured.value = false
+  error.value = null
+  emit('unavailable')
+}
+
+const handleRequestError = (err, fallback) => {
+  // Backend returns 503 when Finnhub/market-data is not configured.
+  if (err.response?.status === 503) {
+    markUnavailable()
+    return
+  }
+  error.value = err.response?.data?.error || fallback
+}
+
+const normalizeEarnings = (data) => {
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+
+  return data
+    .map(earning => {
+      const earningsDate = new Date(earning.date)
+      earningsDate.setHours(0, 0, 0, 0)
+      const diffTime = earningsDate - now
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+      return {
+        ...earning,
+        daysUntil: diffDays
+      }
+    })
+    .filter(earning => earning.daysUntil >= 0 && earning.daysUntil <= 14)
+    .sort((a, b) => a.daysUntil - b.daysUntil)
 }
 
 const fetchEarnings = async () => {
@@ -172,27 +210,10 @@ const fetchEarnings = async () => {
       }
     })
 
-    // Calculate days until earnings and sort by date
-    const now = new Date()
-    now.setHours(0, 0, 0, 0)
-    
-    earnings.value = response.data
-      .map(earning => {
-        const earningsDate = new Date(earning.date)
-        earningsDate.setHours(0, 0, 0, 0)
-        const diffTime = earningsDate - now
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-        
-        return {
-          ...earning,
-          daysUntil: diffDays
-        }
-      })
-      .filter(earning => earning.daysUntil >= 0 && earning.daysUntil <= 14) // Only next 2 weeks
-      .sort((a, b) => a.daysUntil - b.daysUntil)
+    earnings.value = normalizeEarnings(response.data)
   } catch (err) {
     console.error('Failed to fetch earnings:', err)
-    error.value = err.response?.data?.error || 'Failed to load earnings data. Please try again later.'
+    handleRequestError(err, 'Failed to load earnings data. Please try again later.')
   } finally {
     loading.value = false
   }
@@ -209,26 +230,10 @@ const refreshEarnings = async () => {
       symbols: props.symbols.join(',')
     })
 
-    const now = new Date()
-    now.setHours(0, 0, 0, 0)
-
-    earnings.value = response.data
-      .map(earning => {
-        const earningsDate = new Date(earning.date)
-        earningsDate.setHours(0, 0, 0, 0)
-        const diffTime = earningsDate - now
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-
-        return {
-          ...earning,
-          daysUntil: diffDays
-        }
-      })
-      .filter(earning => earning.daysUntil >= 0 && earning.daysUntil <= 14)
-      .sort((a, b) => a.daysUntil - b.daysUntil)
+    earnings.value = normalizeEarnings(response.data)
   } catch (err) {
     console.error('Failed to refresh earnings:', err)
-    error.value = err.response?.data?.error || 'Failed to refresh earnings data. Please try again later.'
+    handleRequestError(err, 'Failed to refresh earnings data. Please try again later.')
   } finally {
     loading.value = false
   }

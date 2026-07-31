@@ -1050,16 +1050,18 @@
             <!-- Upcoming Earnings Section (Pro Only) -->
             <template v-if="element.id === 'upcoming-earnings'">
               <UpcomingEarningsSection
-                v-if="openTradeSymbols.length > 0 && authStore.user?.tier === 'pro'"
+                v-if="openTradeSymbols.length > 0 && authStore.user?.tier === 'pro' && earningsServiceAvailable"
                 :symbols="openTradeSymbols"
+                @unavailable="earningsServiceAvailable = false"
               />
             </template>
 
             <!-- Trade News Section (Pro Only) -->
             <template v-if="element.id === 'trade-news'">
               <TradeNewsSection
-                v-if="openTradeSymbols.length > 0 && authStore.user?.tier === 'pro'"
+                v-if="openTradeSymbols.length > 0 && authStore.user?.tier === 'pro' && newsServiceAvailable"
                 :symbols="openTradeSymbols"
+                @unavailable="newsServiceAvailable = false"
               />
             </template>
 
@@ -1574,8 +1576,16 @@
             </div>
 
             <template v-if="newsRailUserVisible">
-              <TradeNewsSection :symbols="openTradeSymbols" />
-              <UpcomingEarningsSection :symbols="openTradeSymbols" />
+              <TradeNewsSection
+                v-if="newsServiceAvailable"
+                :symbols="openTradeSymbols"
+                @unavailable="newsServiceAvailable = false"
+              />
+              <UpcomingEarningsSection
+                v-if="earningsServiceAvailable"
+                :symbols="openTradeSymbols"
+                @unavailable="earningsServiceAvailable = false"
+              />
             </template>
           </div>
         </aside>
@@ -2041,8 +2051,14 @@ const heroRangeLabel = computed(() => getSelectedTimeRangeText())
 // flow. Shown when:
 //   1) The user toggled it visible in Customize (default: visible).
 //   2) They're Pro and have at least one open position to query.
+//   3) At least one of the news/earnings services is configured (503 from
+//      those endpoints marks the matching card unavailable and collapses the
+//      rail when both are missing).
 // In customize mode itself we keep rendering the rail wrapper even when
-// "hidden" so the user has a header to re-enable it.
+// "hidden" so the user has a header to re-enable it — unless both services
+// are unavailable, in which case there is nothing useful to toggle.
+const newsServiceAvailable = ref(true)
+const earningsServiceAvailable = ref(true)
 const newsRailSection = computed(
   () => dashboardLayout.value.find(s => s.id === 'news-rail')
 )
@@ -2050,6 +2066,7 @@ const newsRailUserVisible = computed(() => newsRailSection.value?.visible !== fa
 const showNewsRail = computed(() => {
   if (openTradeSymbols.value.length === 0) return false
   if (authStore.user?.tier !== 'pro') return false
+  if (!newsServiceAvailable.value && !earningsServiceAvailable.value) return false
   // While customizing, keep the rail mounted so the toggle/header is visible.
   return newsRailUserVisible.value || isCustomizing.value
 })

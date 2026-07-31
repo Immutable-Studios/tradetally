@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div v-if="isConfigured" class="card">
     <div class="card-body">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-medium text-gray-900 dark:text-white">Latest News</h3>
@@ -119,9 +119,12 @@ const props = defineProps({
   }
 })
 
+const emit = defineEmits(['unavailable'])
+
 const newsItems = ref([])
 const loading = ref(false)
 const error = ref(null)
+const isConfigured = ref(true)
 const expandedSymbols = ref({})
 
 const groupedNews = computed(() => {
@@ -162,6 +165,21 @@ const toggleExpanded = (symbol) => {
   expandedSymbols.value[symbol] = !expandedSymbols.value[symbol]
 }
 
+const markUnavailable = () => {
+  isConfigured.value = false
+  error.value = null
+  emit('unavailable')
+}
+
+const handleRequestError = (err, fallback) => {
+  // Backend returns 503 when Finnhub/market-data is not configured.
+  if (err.response?.status === 503) {
+    markUnavailable()
+    return
+  }
+  error.value = err.response?.data?.error || fallback
+}
+
 const fetchNews = async () => {
   if (!props.symbols.length) {
     newsItems.value = []
@@ -181,7 +199,7 @@ const fetchNews = async () => {
     newsItems.value = response.data
   } catch (err) {
     console.error('Failed to fetch news:', err)
-    error.value = err.response?.data?.error || 'Failed to load news. Please try again later.'
+    handleRequestError(err, 'Failed to load news. Please try again later.')
   } finally {
     loading.value = false
   }
@@ -201,7 +219,7 @@ const refreshNews = async () => {
     newsItems.value = response.data
   } catch (err) {
     console.error('Failed to refresh news:', err)
-    error.value = err.response?.data?.error || 'Failed to refresh news. Please try again later.'
+    handleRequestError(err, 'Failed to refresh news. Please try again later.')
   } finally {
     loading.value = false
   }

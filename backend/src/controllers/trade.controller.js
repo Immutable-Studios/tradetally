@@ -3858,6 +3858,13 @@ const tradeController = {
         return res.json([]);
       }
 
+      if (!finnhub.isConfigured()) {
+        return res.status(503).json({
+          error: 'News service not configured',
+          details: marketDataConfigDetails('news data')
+        });
+      }
+
       const NewsService = require('../services/newsService');
       const allNews = await NewsService.getNewsForSymbols(symbolList);
 
@@ -3909,6 +3916,13 @@ const tradeController = {
 
       if (symbolList.length === 0) {
         return res.json([]);
+      }
+
+      if (!finnhub.isConfigured()) {
+        return res.status(503).json({
+          error: 'Earnings service not configured',
+          details: marketDataConfigDetails('earnings data')
+        });
       }
 
       const EarningsService = require('../services/earningsService');
