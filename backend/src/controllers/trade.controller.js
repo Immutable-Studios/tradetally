@@ -38,6 +38,29 @@ const {
 } = require('../services/brokerFeeApplicationService');
 const OptionStrategyGroupingService = require('../services/optionStrategyGroupingService');
 const AmbiguousTradeReviewService = require('../services/ambiguousTradeReviewService');
+const {
+  resolveAuthorUserId,
+  canUpdateAuthoredRow,
+  canDeleteAuthoredRow
+} = require('../utils/authorship');
+
+function tradeCommentSelectSql(isPublic) {
+  const usernameField = isPublic
+    ? 'generate_anonymous_name(COALESCE(tc.author_user_id, tc.user_id)) as username'
+    : 'COALESCE(au.username, u.username) as username';
+  return `
+    SELECT tc.id, tc.trade_id, tc.user_id, tc.author_user_id, tc.comment,
+           tc.created_at, tc.updated_at, tc.edited_at,
+           ${usernameField},
+           CASE WHEN $2::boolean THEN NULL ELSE COALESCE(au.avatar_url, u.avatar_url) END AS avatar_url,
+           CASE WHEN $2::boolean THEN NULL ELSE COALESCE(au.email, u.email) END AS author_email,
+           CASE WHEN $2::boolean THEN NULL ELSE COALESCE(au.full_name, u.full_name) END AS author_full_name,
+           (tc.author_user_id IS NOT NULL AND tc.author_user_id IS DISTINCT FROM tc.user_id) AS is_mentor_authored
+    FROM trade_comments tc
+    JOIN users u ON tc.user_id = u.id
+    LEFT JOIN users au ON au.id = COALESCE(tc.author_user_id, tc.user_id)
+  `;
+}
 
 function marketDataApiKeyName() {
   return finnhub.providerName === 'fmp' ? 'FMP_API_KEY' : 'FINNHUB_API_KEY';
@@ -1593,26 +1616,22 @@ const tradeController = {
         return res.status(404).json({ error: 'Trade not found' });
       }
 
+      const authorUserId = resolveAuthorUserId(req);
       const insertQuery = `
-        INSERT INTO trade_comments (trade_id, user_id, comment)
-        VALUES ($1, $2, $3)
+        INSERT INTO trade_comments (trade_id, user_id, author_user_id, comment)
+        VALUES ($1, $2, $3, $4)
         RETURNING *
       `;
 
-      const insertResult = await db.query(insertQuery, [req.params.id, req.user.id, comment]);
+      const insertResult = await db.query(insertQuery, [
+        req.params.id,
+        req.user.id,
+        authorUserId,
+        comment
+      ]);
 
-      // For public trades, use anonymous names to protect privacy
-      const usernameField = trade.is_public
-        ? 'generate_anonymous_name(u.id) as username'
-        : 'u.username';
-
-      // Get the comment with user information
       const selectQuery = `
-        SELECT tc.id, tc.trade_id, tc.comment, tc.created_at, tc.updated_at,
-               ${usernameField},
-               CASE WHEN $2::boolean THEN NULL ELSE u.avatar_url END AS avatar_url
-        FROM trade_comments tc
-        JOIN users u ON tc.user_id = u.id
+        ${tradeCommentSelectSql(trade.is_public)}
         WHERE tc.id = $1
       `;
 
@@ -1631,16 +1650,8 @@ const tradeController = {
         return res.status(404).json({ error: 'Trade not found' });
       }
 
-      // For public trades, use anonymous names to protect privacy
-      const usernameField = trade.is_public
-        ? 'generate_anonymous_name(u.id) as username'
-        : 'u.username';
-
       const query = `
-        SELECT tc.*, ${usernameField},
-               CASE WHEN $2::boolean THEN NULL ELSE u.avatar_url END AS avatar_url
-        FROM trade_comments tc
-        JOIN users u ON tc.user_id = u.id
+        ${tradeCommentSelectSql(trade.is_public)}
         WHERE tc.trade_id = $1
         ORDER BY tc.created_at DESC
       `;
@@ -1669,7 +1680,6 @@ const tradeController = {
         return res.status(404).json({ error: 'Trade not found' });
       }
 
-      // Check if comment exists and belongs to user
       const existingCommentQuery = `
         SELECT * FROM trade_comments
         WHERE id = $1 AND trade_id = $2 AND user_id = $3
@@ -1680,26 +1690,23 @@ const tradeController = {
         return res.status(404).json({ error: 'Comment not found or not authorized' });
       }
 
-      // Update comment
+      if (!canUpdateAuthoredRow(req, existingResult.rows[0])) {
+        return res.status(403).json({
+          error: 'Not authorized to edit this comment',
+          code: 'AUTHOR_FORBIDDEN'
+        });
+      }
+
       const updateQuery = `
         UPDATE trade_comments
         SET comment = $1, edited_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
         RETURNING *
       `;
-      const updateResult = await db.query(updateQuery, [comment.trim(), commentId]);
+      await db.query(updateQuery, [comment.trim(), commentId]);
 
-      // For public trades, use anonymous names to protect privacy
-      const usernameField = trade.is_public
-        ? 'generate_anonymous_name(u.id) as username'
-        : 'u.username';
-
-      // Get updated comment with user info
       const query = `
-        SELECT tc.*, ${usernameField},
-               CASE WHEN $2::boolean THEN NULL ELSE u.avatar_url END AS avatar_url
-        FROM trade_comments tc
-        JOIN users u ON tc.user_id = u.id
+        ${tradeCommentSelectSql(trade.is_public)}
         WHERE tc.id = $1
       `;
       const result = await db.query(query, [commentId, trade.is_public]);
@@ -1721,7 +1728,6 @@ const tradeController = {
         return res.status(404).json({ error: 'Trade not found' });
       }
 
-      // Check if comment exists and belongs to user
       const existingCommentQuery = `
         SELECT * FROM trade_comments
         WHERE id = $1 AND trade_id = $2 AND user_id = $3
@@ -1732,7 +1738,13 @@ const tradeController = {
         return res.status(404).json({ error: 'Comment not found or not authorized' });
       }
 
-      // Delete comment
+      if (!canDeleteAuthoredRow(req, existingResult.rows[0])) {
+        return res.status(403).json({
+          error: 'Not authorized to delete this comment',
+          code: 'AUTHOR_FORBIDDEN'
+        });
+      }
+
       const deleteQuery = `DELETE FROM trade_comments WHERE id = $1`;
       await db.query(deleteQuery, [commentId]);
       

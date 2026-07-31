@@ -1328,44 +1328,59 @@
                     <div
                       v-for="comment in comments"
                     :key="comment.id"
-                    class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4"
+                    class="rounded-lg p-4"
+                    :class="isMentorAuthored(comment)
+                      ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50'
+                      : 'bg-gray-50 dark:bg-gray-700'"
                   >
                     <div class="flex items-start space-x-3">
                       <div class="flex-shrink-0">
                         <img
                           v-if="comment.avatar_url"
                           :src="comment.avatar_url"
-                          :alt="comment.username"
+                          :alt="authorDisplayName(comment)"
                           class="h-8 w-8 rounded-full"
                         />
                         <div
                           v-else
-                          class="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center"
+                          class="h-8 w-8 rounded-full flex items-center justify-center"
+                          :class="isMentorAuthored(comment) ? 'bg-amber-600' : 'bg-primary-600'"
                         >
                           <span class="text-xs font-medium text-white">
-                            {{ comment.username.charAt(0).toUpperCase() }}
+                            {{ authorDisplayName(comment).charAt(0).toUpperCase() }}
                           </span>
                         </div>
                       </div>
                       <div class="flex-1">
                         <div class="flex items-center justify-between">
-                          <div class="flex items-center space-x-2">
+                          <div class="flex items-center space-x-2 flex-wrap">
                             <h4 class="text-sm font-medium text-gray-900 dark:text-white">
-                              {{ comment.username }}
+                              {{ authorDisplayName(comment) }}
                             </h4>
+                            <span
+                              v-if="isMentorAuthored(comment)"
+                              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                            >
+                              Mentor
+                            </span>
                             <span class="text-xs text-gray-500 dark:text-gray-400">
                               {{ formatCommentDate(comment.created_at) }}
                               <span v-if="comment.edited_at" class="italic">(edited)</span>
                             </span>
                           </div>
-                          <div v-if="comment.user_id === authStore.user?.id" class="flex items-center space-x-2">
+                          <div
+                            v-if="canEditAuthoredItem(authStore, comment) || canDeleteAuthoredItem(authStore, comment)"
+                            class="flex items-center space-x-2"
+                          >
                             <button
+                              v-if="canEditAuthoredItem(authStore, comment)"
                               @click="startEditComment(comment)"
                               class="text-xs text-gray-500 hover:text-primary-600 transition-colors"
                             >
                               Edit
                             </button>
                             <button
+                              v-if="canDeleteAuthoredItem(authStore, comment)"
                               @click="deleteTradeComment(comment.id)"
                               class="text-xs text-red-500 hover:text-red-700 transition-colors"
                             >
@@ -1609,6 +1624,12 @@ import { DocumentIcon, ChatBubbleLeftIcon, SparklesIcon, ShareIcon, TrashIcon, P
 import { useCurrencyFormatter } from '@/composables/useCurrencyFormatter'
 import api from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
+import {
+  authorDisplayName,
+  canDeleteAuthoredItem,
+  canEditAuthoredItem,
+  isMentorAuthored,
+} from '@/utils/authorship'
 import TradeChartVisualization from '@/components/trades/TradeChartVisualization.vue'
 import TradeImages from '@/components/trades/TradeImages.vue'
 import TradeCharts from '@/components/trades/TradeCharts.vue'
@@ -2571,12 +2592,7 @@ async function submitComment() {
       comment: newComment.value.trim()
     })
     
-    // Add the new comment to the list
-    comments.value.unshift({
-      ...response.data.comment,
-      username: authStore.user?.username || 'You',
-      avatar_url: authStore.user?.avatar_url || null
-    })
+    comments.value.unshift(response.data.comment)
     
     newComment.value = ''
     showSuccess('Success', 'Comment posted successfully')

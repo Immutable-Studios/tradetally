@@ -11,6 +11,39 @@ const fs = require('fs').promises;
 const { verifyJwtToken, TOKEN_PURPOSES } = require('../middleware/auth');
 const User = require('../models/User');
 const { isTokenSessionValid } = require('../middleware/auth');
+const {
+  resolveAuthorUserId,
+  canUpdateAuthoredRow,
+  canDeleteAuthoredRow
+} = require('../utils/authorship');
+
+async function enrichGeneralNotes(notes) {
+  const list = Array.isArray(notes) ? notes : (notes ? [notes] : []);
+  if (list.length === 0) return notes;
+
+  const ids = [...new Set(
+    list.map((row) => row.author_user_id || row.user_id).filter(Boolean)
+  )];
+  if (ids.length === 0) return notes;
+
+  const result = await db.query(
+    `SELECT id, username, email, full_name, avatar_url FROM users WHERE id = ANY($1)`,
+    [ids]
+  );
+  const byId = Object.fromEntries(result.rows.map((user) => [String(user.id), user]));
+
+  for (const row of list) {
+    const author = byId[String(row.author_user_id || row.user_id)] || {};
+    row.username = author.username || null;
+    row.author_email = author.email || null;
+    row.author_full_name = author.full_name || null;
+    row.avatar_url = author.avatar_url || null;
+    row.is_mentor_authored = Boolean(
+      row.author_user_id && String(row.author_user_id) !== String(row.user_id)
+    );
+  }
+  return notes;
+}
 
 
 // Get diary entries for user with filtering and pagination
@@ -65,13 +98,12 @@ const getEntries = async (req, res) => {
 const getTodaysEntry = async (req, res) => {
   try {
     const userId = req.user.id;
-    const entry = await Diary.findTodaysEntry(userId);
+    const authorUserId = resolveAuthorUserId(req);
+    const today = new Date().toISOString().split('T')[0];
+    const entry = await Diary.findTodaysEntry(userId, authorUserId);
+    const entries = await Diary.findAllByDate(userId, today, 'diary');
 
-    if (!entry) {
-      return res.json({ entry: null });
-    }
-
-    res.json({ entry });
+    res.json({ entry: entry || null, entries });
   } catch (error) {
     console.error('Error fetching today\'s diary entry:', error);
     res.status(500).json({ error: 'Failed to fetch today\'s entry' });
@@ -109,13 +141,11 @@ const getEntryByDate = async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
     }
 
-    const entry = await Diary.findByDate(userId, date, entryType);
+    const authorUserId = resolveAuthorUserId(req);
+    const entry = await Diary.findByDate(userId, date, entryType, authorUserId);
+    const entries = await Diary.findAllByDate(userId, date, entryType);
 
-    if (!entry) {
-      return res.json({ entry: null });
-    }
-
-    res.json({ entry });
+    res.json({ entry: entry || null, entries });
   } catch (error) {
     console.error('Error fetching diary entry by date:', error);
     res.status(500).json({ error: 'Failed to fetch diary entry' });
@@ -142,7 +172,8 @@ const createOrUpdateEntry = [
         linkedTrades: formData.linkedTrades || [],
         tags: formData.tags || [],
         followedPlan: formData.followedPlan,
-        lessonsLearned: formData.lessonsLearned
+        lessonsLearned: formData.lessonsLearned,
+        authorUserId: resolveAuthorUserId(req)
       };
 
       const entry = await Diary.create(userId, entryData);
@@ -166,6 +197,17 @@ const updateEntry = [
       const userId = req.user.id;
       const { id } = req.params;
       const formData = req.body;
+
+      const existing = await Diary.findById(id, userId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Diary entry not found' });
+      }
+      if (!canUpdateAuthoredRow(req, existing)) {
+        return res.status(403).json({
+          error: 'Not authorized to edit this diary entry',
+          code: 'AUTHOR_FORBIDDEN'
+        });
+      }
 
       // Keep data in camelCase format as expected by the Diary model
       const updates = {};
@@ -203,6 +245,17 @@ const deleteEntry = async (req, res) => {
     const userId = req.user.id;
     const { id } = req.params;
 
+    const existing = await Diary.findById(id, userId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Diary entry not found' });
+    }
+    if (!canDeleteAuthoredRow(req, existing)) {
+      return res.status(403).json({
+        error: 'Not authorized to delete this diary entry',
+        code: 'AUTHOR_FORBIDDEN'
+      });
+    }
+
     const deletedEntry = await Diary.delete(id, userId);
 
     if (!deletedEntry) {
@@ -226,6 +279,12 @@ const uploadDiaryImages = async (req, res) => {
     const entry = await Diary.findById(id, userId);
     if (!entry) {
       return res.status(404).json({ error: 'Diary entry not found' });
+    }
+    if (!canUpdateAuthoredRow(req, entry)) {
+      return res.status(403).json({
+        error: 'Not authorized to modify this diary entry',
+        code: 'AUTHOR_FORBIDDEN'
+      });
     }
 
     if (!req.files || req.files.length === 0) {
@@ -427,6 +486,12 @@ const deleteDiaryImage = async (req, res) => {
     const entry = await Diary.findById(diaryEntryId, userId);
     if (!entry) {
       return res.status(404).json({ error: 'Diary entry not found' });
+    }
+    if (!canUpdateAuthoredRow(req, entry)) {
+      return res.status(403).json({
+        error: 'Not authorized to modify this diary entry',
+        code: 'AUTHOR_FORBIDDEN'
+      });
     }
 
     // Get attachment details before deletion
@@ -708,6 +773,7 @@ const getGeneralNotes = async (req, res, next) => {
       ORDER BY is_pinned DESC, updated_at DESC
     `;
     const result = await db.query(query, [req.user.id]);
+    await enrichGeneralNotes(result.rows);
     res.json({ notes: result.rows });
   } catch (error) {
     next(error);
@@ -722,12 +788,20 @@ const createGeneralNote = async (req, res, next) => {
       return res.status(400).json({ error: 'Content is required' });
     }
 
+    const authorUserId = resolveAuthorUserId(req);
     const query = `
-      INSERT INTO general_notes (user_id, title, content, is_pinned)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO general_notes (user_id, author_user_id, title, content, is_pinned)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
-    const result = await db.query(query, [req.user.id, title, content.trim(), isPinned]);
+    const result = await db.query(query, [
+      req.user.id,
+      authorUserId,
+      title,
+      content.trim(),
+      isPinned
+    ]);
+    await enrichGeneralNotes(result.rows[0]);
     res.status(201).json({ note: result.rows[0] });
   } catch (error) {
     next(error);
@@ -745,6 +819,13 @@ const updateGeneralNote = async (req, res, next) => {
 
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ error: 'Note not found' });
+    }
+
+    if (!canUpdateAuthoredRow(req, checkResult.rows[0])) {
+      return res.status(403).json({
+        error: 'Not authorized to edit this note',
+        code: 'AUTHOR_FORBIDDEN'
+      });
     }
 
     const updates = [];
@@ -782,6 +863,7 @@ const updateGeneralNote = async (req, res, next) => {
     `;
 
     const result = await db.query(query, values);
+    await enrichGeneralNotes(result.rows[0]);
     res.json({ note: result.rows[0] });
   } catch (error) {
     next(error);
@@ -791,6 +873,20 @@ const updateGeneralNote = async (req, res, next) => {
 const deleteGeneralNote = async (req, res, next) => {
   try {
     const { id } = req.params;
+
+    const checkQuery = 'SELECT * FROM general_notes WHERE id = $1 AND user_id = $2';
+    const checkResult = await db.query(checkQuery, [id, req.user.id]);
+
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    if (!canDeleteAuthoredRow(req, checkResult.rows[0])) {
+      return res.status(403).json({
+        error: 'Not authorized to delete this note',
+        code: 'AUTHOR_FORBIDDEN'
+      });
+    }
 
     const query = 'DELETE FROM general_notes WHERE id = $1 AND user_id = $2 RETURNING *';
     const result = await db.query(query, [id, req.user.id]);

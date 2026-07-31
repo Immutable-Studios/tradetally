@@ -18,7 +18,7 @@
         
         <div class="flex items-center space-x-2">
           <button
-            v-if="entry"
+            v-if="entry && canEditAuthoredItem(authStore, entry)"
             @click="editEntry"
             class="btn-secondary text-sm"
           >
@@ -50,6 +50,22 @@
         <!-- Title -->
         <div v-if="entry.title" class="border-l-4 border-primary-500 pl-3">
           <h4 class="font-medium text-gray-900 dark:text-white">{{ entry.title }}</h4>
+          <span
+            v-if="isMentorAuthored(entry)"
+            class="inline-flex items-center mt-1 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+          >
+            Mentor · {{ authorDisplayName(entry) }}
+          </span>
+        </div>
+        <div
+          v-else-if="isMentorAuthored(entry)"
+          class="mb-2"
+        >
+          <span
+            class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+          >
+            Mentor · {{ authorDisplayName(entry) }}
+          </span>
         </div>
 
         <!-- Content (split into cards if appended) -->
@@ -131,11 +147,54 @@
         </div>
       </div>
 
+      <!-- Companion entries from other authors (mentor ↔ owner) -->
+      <div
+        v-if="companionEntries.length > 0 && (expanded || showPreview)"
+        class="mt-4 space-y-3"
+      >
+        <div
+          v-for="other in companionEntries"
+          :key="other.id"
+          class="rounded-lg p-3 border"
+          :class="isMentorAuthored(other)
+            ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10'
+            : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/30'"
+        >
+          <div class="flex items-center gap-2 mb-2">
+            <span
+              v-if="isMentorAuthored(other)"
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+            >
+              Mentor · {{ authorDisplayName(other) }}
+            </span>
+            <span
+              v-else
+              class="text-xs font-medium text-gray-600 dark:text-gray-300"
+            >
+              {{ authorDisplayName(other) || 'Owner' }}
+            </span>
+          </div>
+          <div
+            v-if="other.title"
+            class="text-sm font-medium text-gray-900 dark:text-white mb-1"
+          >
+            {{ other.title }}
+          </div>
+          <div
+            v-if="other.content"
+            class="text-sm text-gray-700 dark:text-gray-300 prose prose-sm max-w-none dark:prose-invert"
+            v-html="parseMarkdown(other.content)"
+          ></div>
+        </div>
+      </div>
+
       <!-- No Entry State -->
       <div v-if="!entry && !loading" class="text-center py-6">
         <BookOpenIcon class="w-12 h-12 text-gray-400 mx-auto mb-3" />
         <p class="text-gray-500 dark:text-gray-400 mb-4">
-          No journal entry for today yet. Start documenting your trading plan and market thoughts.
+          {{ companionEntries.length
+            ? 'Add your own notes for today (shown separately from the other author).'
+            : 'No journal entry for today yet. Start documenting your trading plan and market thoughts.' }}
         </p>
         <button
           @click="createTodaysEntry"
@@ -213,6 +272,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDiaryStore } from '@/stores/diary'
+import { useAuthStore } from '@/stores/auth'
+import {
+  authorDisplayName,
+  canEditAuthoredItem,
+  isMentorAuthored,
+} from '@/utils/authorship'
 import { parseMarkdown, truncateHtml as truncateHtmlUtil } from '@/utils/markdown'
 import {
   PlusIcon,
@@ -227,6 +292,7 @@ import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const router = useRouter()
 const diaryStore = useDiaryStore()
+const authStore = useAuthStore()
 
 // Component state
 const expanded = ref(false)
@@ -242,6 +308,10 @@ const quickEntry = ref({
 
 // Computed properties
 const entry = computed(() => diaryStore.todaysEntry)
+const companionEntries = computed(() => {
+  const ownId = entry.value?.id
+  return (diaryStore.todaysEntries || []).filter((e) => e.id !== ownId)
+})
 const loading = computed(() => diaryStore.loading)
 
 // Methods

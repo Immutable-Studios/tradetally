@@ -60,21 +60,23 @@
                             <div
                                 v-for="comment in comments"
                                 :key="comment.id"
-                                class="flex space-x-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
+                                class="flex space-x-3 p-3 rounded-lg"
+                                :class="isMentorAuthored(comment)
+                                    ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50'
+                                    : 'bg-gray-50 dark:bg-gray-700'"
                             >
                                 <div class="flex-shrink-0">
                                     <div
-                                        class="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center"
+                                        class="h-8 w-8 rounded-full flex items-center justify-center"
+                                        :class="isMentorAuthored(comment) ? 'bg-amber-600' : 'bg-primary-600'"
                                     >
                                         <span
                                             class="text-sm font-medium text-white"
                                         >
                                             {{
-                                                comment.username
-                                                    ? comment.username
-                                                          .charAt(0)
-                                                          .toUpperCase()
-                                                    : "U"
+                                                authorDisplayName(comment)
+                                                    .charAt(0)
+                                                    .toUpperCase()
                                             }}
                                         </span>
                                     </div>
@@ -84,15 +86,18 @@
                                         class="flex items-center justify-between"
                                     >
                                         <div
-                                            class="flex items-center space-x-2"
+                                            class="flex items-center space-x-2 flex-wrap"
                                         >
                                             <span
                                                 class="font-medium text-gray-900 dark:text-white"
                                             >
-                                                {{
-                                                    comment.username ||
-                                                    "Unknown User"
-                                                }}
+                                                {{ authorDisplayName(comment) }}
+                                            </span>
+                                            <span
+                                                v-if="isMentorAuthored(comment)"
+                                                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                                            >
+                                                Mentor
                                             </span>
                                             <span
                                                 class="text-sm text-gray-500 dark:text-gray-400"
@@ -110,13 +115,11 @@
                                             </span>
                                         </div>
                                         <div
-                                            v-if="
-                                                comment.user_id ===
-                                                currentUserId
-                                            "
+                                            v-if="canEditAuthoredItem(authStore, comment) || canDeleteAuthoredItem(authStore, comment)"
                                             class="flex items-center space-x-2"
                                         >
                                             <button
+                                                v-if="canEditAuthoredItem(authStore, comment)"
                                                 @click="
                                                     startEditComment(comment)
                                                 "
@@ -125,6 +128,7 @@
                                                 Edit
                                             </button>
                                             <button
+                                                v-if="canDeleteAuthoredItem(authStore, comment)"
                                                 @click="
                                                     deleteComment(comment.id)
                                                 "
@@ -218,11 +222,17 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, nextTick } from "vue";
+import { ref, watch } from "vue";
 import { ChatBubbleLeftIcon } from "@heroicons/vue/24/outline";
 import api from "@/services/api";
 import { useNotification } from "@/composables/useNotification";
 import { useAuthStore } from "@/stores/auth";
+import {
+    authorDisplayName,
+    canDeleteAuthoredItem,
+    canEditAuthoredItem,
+    isMentorAuthored,
+} from "@/utils/authorship";
 
 const props = defineProps({
     isOpen: {
@@ -246,8 +256,6 @@ const loading = ref(false);
 const submitting = ref(false);
 const editingCommentId = ref(null);
 const editCommentText = ref("");
-
-const currentUserId = computed(() => authStore.user?.id);
 
 function closeDialog() {
     emit("close");

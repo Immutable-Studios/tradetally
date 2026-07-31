@@ -2,23 +2,48 @@ const db = require('../config/database');
 const { getUserLocalDate } = require('../utils/timezone');
 
 class Diary {
+  static async enrichAuthors(rows) {
+    const list = Array.isArray(rows) ? rows : (rows ? [rows] : []);
+    if (list.length === 0) return rows;
+
+    const ids = [...new Set(
+      list.map((row) => row.author_user_id || row.user_id).filter(Boolean)
+    )];
+
+    if (ids.length === 0) return rows;
+
+    const result = await db.query(
+      `SELECT id, username, email, full_name, avatar_url FROM users WHERE id = ANY($1)`,
+      [ids]
+    );
+    const byId = Object.fromEntries(result.rows.map((user) => [String(user.id), user]));
+
+    for (const row of list) {
+      const authorId = row.author_user_id || row.user_id;
+      const author = byId[String(authorId)] || {};
+      row.username = author.username || null;
+      row.author_email = author.email || null;
+      row.author_full_name = author.full_name || null;
+      row.avatar_url = author.avatar_url || null;
+      row.is_mentor_authored = Boolean(
+        row.author_user_id && String(row.author_user_id) !== String(row.user_id)
+      );
+    }
+
+    return rows;
+  }
+
   static async create(userId, entryData) {
     const {
       entryDate, title, content, tags, entryType = 'diary',
-      marketBias, keyLevels, watchlist, linkedTrades, followedPlan, lessonsLearned
+      marketBias, keyLevels, watchlist, linkedTrades, followedPlan, lessonsLearned,
+      authorUserId = null
     } = entryData;
 
     // Use provided date or today's date in user's timezone
     const finalEntryDate = entryDate || await getUserLocalDate(userId);
 
-    const query = `
-      INSERT INTO diary_entries (
-        user_id, entry_date, title, content, tags, entry_type,
-        market_bias, key_levels, watchlist, linked_trades, followed_plan, lessons_learned
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      ON CONFLICT (user_id, entry_date, entry_type)
-      DO UPDATE SET
+    const updateSet = `
         title = EXCLUDED.title,
         content = EXCLUDED.content,
         tags = EXCLUDED.tags,
@@ -29,6 +54,32 @@ class Diary {
         followed_plan = EXCLUDED.followed_plan,
         lessons_learned = EXCLUDED.lessons_learned,
         updated_at = CURRENT_TIMESTAMP
+    `;
+
+    // Partial unique indexes require matching ON CONFLICT targets.
+    const query = authorUserId
+      ? `
+      INSERT INTO diary_entries (
+        user_id, entry_date, title, content, tags, entry_type,
+        market_bias, key_levels, watchlist, linked_trades, followed_plan, lessons_learned,
+        author_user_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (user_id, entry_date, entry_type, author_user_id)
+        WHERE author_user_id IS NOT NULL
+      DO UPDATE SET ${updateSet}
+      RETURNING *
+    `
+      : `
+      INSERT INTO diary_entries (
+        user_id, entry_date, title, content, tags, entry_type,
+        market_bias, key_levels, watchlist, linked_trades, followed_plan, lessons_learned,
+        author_user_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (user_id, entry_date, entry_type)
+        WHERE author_user_id IS NULL
+      DO UPDATE SET ${updateSet}
       RETURNING *
     `;
 
@@ -44,10 +95,12 @@ class Diary {
       watchlist || [],
       linkedTrades || [],
       followedPlan || null,
-      lessonsLearned || null
+      lessonsLearned || null,
+      authorUserId
     ];
 
     const result = await db.query(query, values);
+    await this.enrichAuthors(result.rows[0]);
     return result.rows[0];
   }
 
@@ -79,6 +132,9 @@ class Diary {
     query += ` GROUP BY de.id`;
 
     const result = await db.query(query, values);
+    if (result.rows[0]) {
+      await this.enrichAuthors(result.rows[0]);
+    }
     return result.rows[0] || null;
   }
 
@@ -172,13 +228,53 @@ class Diary {
     values.push(limit, offset);
 
     const result = await db.query(query, values);
+    await this.enrichAuthors(result.rows);
     return {
       entries: result.rows,
       total: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0
     };
   }
 
-  static async findByDate(userId, date, entryType = 'diary') {
+  /**
+   * Find a single diary entry for a date/type, scoped to author.
+   * authorUserId null = owner-authored row; set = that mentor's row.
+   */
+  static async findByDate(userId, date, entryType = 'diary', authorUserId = null) {
+    let query = `
+      SELECT de.*,
+        json_agg(
+          json_build_object(
+            'id', da.id,
+            'file_url', da.file_url,
+            'file_type', da.file_type,
+            'file_name', da.file_name,
+            'file_size', da.file_size,
+            'uploaded_at', da.uploaded_at
+          )
+        ) FILTER (WHERE da.id IS NOT NULL) as attachments
+      FROM diary_entries de
+      LEFT JOIN diary_attachments da ON de.id = da.diary_entry_id
+      WHERE de.user_id = $1 AND DATE(de.entry_date) = $2 AND de.entry_type = $3
+    `;
+    const values = [userId, date, entryType];
+
+    if (authorUserId) {
+      query += ` AND de.author_user_id = $4`;
+      values.push(authorUserId);
+    } else {
+      query += ` AND de.author_user_id IS NULL`;
+    }
+
+    query += ` GROUP BY de.id`;
+
+    const result = await db.query(query, values);
+    if (result.rows[0]) {
+      await this.enrichAuthors(result.rows[0]);
+    }
+    return result.rows[0] || null;
+  }
+
+  static async findAllByDate(userId, date, entryType = 'diary') {
     const query = `
       SELECT de.*,
         json_agg(
@@ -195,16 +291,18 @@ class Diary {
       LEFT JOIN diary_attachments da ON de.id = da.diary_entry_id
       WHERE de.user_id = $1 AND DATE(de.entry_date) = $2 AND de.entry_type = $3
       GROUP BY de.id
+      ORDER BY (de.author_user_id IS NOT NULL), de.created_at ASC
     `;
 
     const result = await db.query(query, [userId, date, entryType]);
-    return result.rows[0] || null;
+    await this.enrichAuthors(result.rows);
+    return result.rows;
   }
 
-  static async findTodaysEntry(userId) {
+  static async findTodaysEntry(userId, authorUserId = null) {
     // Get today's date in YYYY-MM-DD format
     const today = new Date().toISOString().split('T')[0];
-    return this.findByDate(userId, today, 'diary');
+    return this.findByDate(userId, today, 'diary', authorUserId);
   }
 
   static async findByDateRange(userId, startDate, endDate) {
@@ -230,6 +328,7 @@ class Diary {
     `;
 
     const result = await db.query(query, [userId, startDate, endDate]);
+    await this.enrichAuthors(result.rows);
     return result.rows;
   }
 
@@ -278,6 +377,9 @@ class Diary {
     `;
 
     const result = await db.query(query, values);
+    if (result.rows[0]) {
+      await this.enrichAuthors(result.rows[0]);
+    }
     return result.rows[0] || null;
   }
 
@@ -288,7 +390,7 @@ class Diary {
       JOIN diary_entries de ON da.diary_entry_id = de.id
       WHERE de.id = $1 AND de.user_id = $2
     `;
-    const attachments = await db.query(attachmentsQuery, [id, userId]);
+    await db.query(attachmentsQuery, [id, userId]);
 
     // Delete the entry (CASCADE will delete attachments)
     const query = `

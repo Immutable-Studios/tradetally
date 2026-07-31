@@ -7,6 +7,7 @@ export const useDiaryStore = defineStore('diary', () => {
   // State
   const entries = ref([])
   const todaysEntry = ref(null)
+  const todaysEntries = ref([])
   const currentEntry = ref(null)
   const loading = ref(false)
   const error = ref(null)
@@ -89,6 +90,7 @@ export const useDiaryStore = defineStore('diary', () => {
     try {
       const response = await api.get('/diary/today')
       todaysEntry.value = response.data.entry
+      todaysEntries.value = response.data.entries || (response.data.entry ? [response.data.entry] : [])
       return response.data.entry
     } catch (err) {
       console.error('Error fetching today\'s entry:', err)
@@ -212,6 +214,7 @@ export const useDiaryStore = defineStore('diary', () => {
       if (todaysEntry.value?.id === id) {
         todaysEntry.value = null
       }
+      todaysEntries.value = todaysEntries.value.filter((e) => e.id !== id)
 
       // Clear current entry if it was deleted
       if (currentEntry.value?.id === id) {
@@ -416,6 +419,7 @@ export const useDiaryStore = defineStore('diary', () => {
   const clearState = () => {
     entries.value = []
     todaysEntry.value = null
+    todaysEntries.value = []
     currentEntry.value = null
     loading.value = false
     error.value = null
@@ -451,6 +455,7 @@ export const useDiaryStore = defineStore('diary', () => {
     // State
     entries,
     todaysEntry,
+    todaysEntries,
     currentEntry,
     loading,
     error,

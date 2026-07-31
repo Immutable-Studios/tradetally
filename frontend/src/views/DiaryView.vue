@@ -234,11 +234,14 @@
         <div
           v-for="entry in entries"
           :key="entry.id"
-          class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow"
+          class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border hover:shadow-md transition-shadow"
+          :class="isMentorAuthored(entry)
+            ? 'border-amber-300 dark:border-amber-700'
+            : 'border-gray-200 dark:border-gray-700'"
         >
           <div class="flex items-start justify-between mb-4">
             <div class="flex-1">
-              <div class="flex items-center space-x-3 mb-2">
+              <div class="flex items-center space-x-3 mb-2 flex-wrap">
                 <span class="text-sm font-medium text-gray-900 dark:text-white">
                   {{ formatDate(entry.entry_date) }}
                 </span>
@@ -261,6 +264,14 @@
                 >
                   {{ entry.market_bias.charAt(0).toUpperCase() + entry.market_bias.slice(1) }}
                 </span>
+
+                <span
+                  v-if="isMentorAuthored(entry)"
+                  class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                  :title="entry.author_email || ''"
+                >
+                  Mentor · {{ authorDisplayName(entry) }}
+                </span>
               </div>
               
               <h3
@@ -273,6 +284,7 @@
             
             <div class="flex items-center space-x-2 ml-4">
               <router-link
+                v-if="canEditAuthoredItem(authStore, entry)"
                 :to="`/diary/${entry.id}/edit`"
                 class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 aria-label="Edit entry"
@@ -282,6 +294,7 @@
               </router-link>
               
               <button
+                v-if="canDeleteAuthoredItem(authStore, entry)"
                 @click="confirmDelete(entry)"
                 class="text-gray-400 hover:text-red-600 dark:hover:text-red-400"
                 aria-label="Delete entry"
@@ -595,6 +608,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import {
+  authorDisplayName,
+  canDeleteAuthoredItem,
+  canEditAuthoredItem,
+  isMentorAuthored,
+} from '@/utils/authorship'
 import { useDiaryStore } from '@/stores/diary'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isToday, addMonths, subMonths, startOfWeek, endOfWeek } from 'date-fns'

@@ -604,8 +604,10 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import { useDiaryStore } from '@/stores/diary'
 import { useDiaryTemplateStore } from '@/stores/diaryTemplate'
+import { canEditAuthoredItem } from '@/utils/authorship'
 import { getLocalToday } from '@/utils/date'
 import SymbolAutocomplete from '@/components/common/SymbolAutocomplete.vue'
 import BaseSelect from '@/components/common/BaseSelect.vue'
@@ -630,6 +632,7 @@ const DiaryImageUpload = defineAsyncComponent(() => import('@/components/diary/D
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const diaryStore = useDiaryStore()
 const templateStore = useDiaryTemplateStore()
 
@@ -987,6 +990,11 @@ const loadEntry = async () => {
     const entry = await diaryStore.fetchEntry(route.params.id)
 
     if (entry) {
+      if (!canEditAuthoredItem(authStore, entry)) {
+        error.value = 'You can only edit your own journal notes'
+        return
+      }
+
       // Set the entry ID and attachments for the image upload component
       entryId.value = entry.id
       entryAttachments.value = entry.attachments || []

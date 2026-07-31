@@ -17,16 +17,28 @@
             <div
                 v-for="note in notes"
                 :key="note.id"
-                class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                class="rounded-lg p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border"
+                :class="isMentorAuthored(note)
+                    ? 'border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-900/10'
+                    : 'border-gray-200 dark:border-gray-700'"
             >
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
-                        <h3
-                            v-if="note.title"
-                            class="font-medium text-gray-900 dark:text-white mb-2"
-                        >
-                            {{ note.title }}
-                        </h3>
+                        <div class="flex items-center gap-2 mb-2 flex-wrap">
+                            <h3
+                                v-if="note.title"
+                                class="font-medium text-gray-900 dark:text-white"
+                            >
+                                {{ note.title }}
+                            </h3>
+                            <span
+                                v-if="isMentorAuthored(note)"
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                                :title="note.author_email || ''"
+                            >
+                                Mentor · {{ authorDisplayName(note) }}
+                            </span>
+                        </div>
                         <p
                             class="text-gray-700 dark:text-gray-300 whitespace-pre-wrap"
                         >
@@ -40,6 +52,7 @@
                     </div>
                     <div class="flex items-center space-x-2 ml-4">
                         <button
+                            v-if="canEditAuthoredItem(authStore, note)"
                             @click="editNote(note)"
                             class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
                             title="Edit"
@@ -47,6 +60,7 @@
                             <PencilIcon class="w-4 h-4" />
                         </button>
                         <button
+                            v-if="canDeleteAuthoredItem(authStore, note)"
                             @click="deleteNote(note.id)"
                             class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                             title="Delete"
@@ -134,7 +148,15 @@ import { PlusIcon, PencilIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import api from "@/services/api";
 import { useUserTimezone } from "@/composables/useUserTimezone";
 import { useNotification } from "@/composables/useNotification";
+import { useAuthStore } from "@/stores/auth";
+import {
+    authorDisplayName,
+    canDeleteAuthoredItem,
+    canEditAuthoredItem,
+    isMentorAuthored,
+} from "@/utils/authorship";
 
+const authStore = useAuthStore();
 const { formatDateTime: formatDateTimeTz } = useUserTimezone();
 const { showDangerConfirmation } = useNotification();
 
