@@ -367,6 +367,21 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Deploy verification helper — commit SHA only (no topology). Used by
+// scripts/verify-deploy.sh so agents can prove which git revision is live.
+app.get('/api/build', (req, res) => {
+  const commit =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.GIT_COMMIT ||
+    process.env.SOURCE_COMMIT ||
+    null;
+  res.json({
+    commit,
+    branch: process.env.RAILWAY_GIT_BRANCH || null,
+    deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null
+  });
+});
+
 app.get('/api/admin/system-health', requireAdmin, async (req, res) => {
   const health = await buildHealthStatus();
   res.status(health.status === 'OK' ? 200 : 503).json(health);
