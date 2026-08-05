@@ -50,6 +50,43 @@
              clean. Filter button shows a dot when a non-default range is
              active. Customize button highlights primary when in edit mode. -->
         <div class="mt-4 sm:mt-0 flex flex-wrap gap-2 items-center justify-end">
+          <button
+            type="button"
+            class="h-10 px-3 inline-flex items-center justify-center gap-1.5 rounded-md border text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :class="brokerSyncBusy
+              ? 'bg-primary-600 text-white border-primary-600'
+              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'"
+            :disabled="brokerSyncBusy || !canTriggerBrokerSync"
+            :title="brokerSyncButtonTitle"
+            :aria-label="brokerSyncBusy ? 'Syncing brokers' : 'Sync brokers now'"
+            @click="syncBrokersNow"
+          >
+            <svg
+              class="w-4 h-4"
+              :class="{ 'animate-spin': brokerSyncBusy }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                v-if="brokerSyncBusy"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 12a8 8 0 018-8"
+              />
+              <path
+                v-else
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            <span class="hidden sm:inline">{{ brokerSyncBusy ? 'Syncing…' : 'Sync' }}</span>
+          </button>
+
           <div class="relative" data-dropdown="timeRange">
             <button
               @click.stop="showTimeRangeDropdown = !showTimeRangeDropdown"
@@ -1686,6 +1723,8 @@ const TradeFilters = defineAsyncComponent(() => import('@/components/trades/Trad
 import { useYearWrappedStore } from '@/stores/yearWrapped'
 import { useUiPreferencesStore } from '@/stores/uiPreferences'
 import { useTradesStore } from '@/stores/trades'
+import { useBrokerSyncStore } from '@/stores/brokerSync'
+import { useNotification } from '@/composables/useNotification'
 import { useGlobalAccountFilter } from '@/composables/useGlobalAccountFilter'
 import { useVisibilityPolling } from '@/composables/useVisibilityPolling'
 import { useUserTimezone } from '@/composables/useUserTimezone'
@@ -1703,7 +1742,106 @@ const { selectedAccount, selectedAccountLabel } = useGlobalAccountFilter()
 const yearWrappedStore = useYearWrappedStore()
 const uiPreferencesStore = useUiPreferencesStore()
 const tradesStore = useTradesStore()
+const brokerSyncStore = useBrokerSyncStore()
+const { showSuccess, showError } = useNotification()
 const router = useRouter()
+
+const brokerSyncBusy = ref(false)
+const canTriggerBrokerSync = computed(() => {
+  if (brokerSyncStore.access && brokerSyncStore.access.canSync === false) return false
+  return true
+})
+const brokerSyncButtonTitle = computed(() => {
+  if (brokerSyncStore.access && brokerSyncStore.access.canSync === false) {
+    return 'Broker sync is a Pro feature'
+  }
+  if (brokerSyncBusy.value) return 'Sync in progress…'
+  const n = brokerSyncStore.connections.length
+  if (!n) return 'Sync brokers now'
+  return n === 1 ? 'Sync broker now' : `Sync ${n} brokers now`
+})
+
+async function syncBrokersNow() {
+  if (brokerSyncBusy.value) return
+
+  try {
+    if (!brokerSyncStore.connections.length) {
+      await brokerSyncStore.fetchConnections()
+    }
+  } catch (_) {
+    showError('Sync failed', brokerSyncStore.error || 'Could not load broker connections')
+    return
+  }
+
+  if (brokerSyncStore.access && brokerSyncStore.access.canSync === false) {
+    showError('Sync paused', 'Broker sync is a Pro feature. Upgrade to Pro to resume syncing, or use CSV import.')
+    return
+  }
+
+  const targets = brokerSyncStore.connections
+  if (!targets.length) {
+    showError('No brokers connected', 'Connect a broker on the Broker Sync page first.')
+    return
+  }
+
+  brokerSyncBusy.value = true
+  try {
+    await Promise.all(targets.map((connection) => brokerSyncStore.triggerSync(connection.id)))
+    showSuccess('Sync started', targets.length === 1
+      ? 'Broker sync started. Dashboard will refresh when it finishes.'
+      : `Started sync for ${targets.length} brokers. Dashboard will refresh when they finish.`)
+
+    const connectionIds = new Set(targets.map((c) => c.id))
+    const inProgressStatuses = ['started', 'fetching', 'parsing', 'importing']
+    const pollInterval = 3000
+    const maxAttempts = 200
+    let attempts = 0
+
+    const poll = async () => {
+      attempts += 1
+      try {
+        await Promise.all([
+          brokerSyncStore.fetchConnections(),
+          brokerSyncStore.fetchSyncLogs()
+        ])
+      } catch (_) {
+        // Keep polling; transient errors shouldn't abort the refresh cycle.
+      }
+
+      const hasActiveSyncs = brokerSyncStore.syncLogs.some((log) =>
+        connectionIds.has(log.connectionId) && inProgressStatuses.includes(log.status)
+      )
+
+      if (hasActiveSyncs && attempts < maxAttempts) {
+        setTimeout(poll, pollInterval)
+        return
+      }
+
+      brokerSyncBusy.value = false
+      try {
+        await Promise.all([
+          fetchAnalytics(),
+          fetchOpenTrades({ fastFirst: false }),
+          fetchRecentTrades(),
+          fetchAiInsight(),
+          fetchBehavioralSummary()
+        ])
+        showSuccess('Sync complete', 'Dashboard data refreshed from the latest broker sync.')
+      } catch (refreshError) {
+        console.error('[Dashboard] Post-sync refresh failed:', refreshError)
+        showError('Sync finished', 'Broker sync finished, but refreshing the dashboard failed. Reload the page.')
+      }
+    }
+
+    setTimeout(poll, pollInterval)
+  } catch (error) {
+    brokerSyncBusy.value = false
+    showError(
+      'Sync failed',
+      brokerSyncStore.error || error?.response?.data?.error || error?.message || 'Failed to start broker sync'
+    )
+  }
+}
 
 const loading = computed(() => analyticsLoading.value || quotesLoading.value)
 const initialLoading = ref(true) // Track initial load separately to preserve scroll on refresh
@@ -3213,6 +3351,9 @@ onMounted(async () => {
 
   // Dashboard shell is ready - drop the full-page spinner
   initialLoading.value = false
+
+  // Prefetch broker connections so the header Sync button knows if it can run.
+  brokerSyncStore.fetchConnections().catch(() => {})
 
   // Silently refresh all data in background
   fetchAnalytics()
