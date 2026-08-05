@@ -570,6 +570,11 @@
               <TodaysJournalEntry />
             </template>
 
+            <!-- Daily Review (account strip, day stats, trade charts) -->
+            <template v-if="element.id === 'daily-review'">
+              <DailyReviewWidget />
+            </template>
+
             <!-- Open Trades Section -->
             <template v-if="element.id === 'open-positions'">
               <div v-if="openTrades.length > 0" class="card">
@@ -1668,6 +1673,7 @@ const BehavioralAlertsCard = defineAsyncComponent(() => import('@/components/das
 const RecentTradesTimeline = defineAsyncComponent(() => import('@/components/dashboard/RecentTradesTimeline.vue'))
 const WinLossPulse = defineAsyncComponent(() => import('@/components/dashboard/WinLossPulse.vue'))
 const MarketRiskCard = defineAsyncComponent(() => import('@/components/dashboard/MarketRiskCard.vue'))
+const DailyReviewWidget = defineAsyncComponent(() => import('@/components/dashboard/DailyReviewWidget.vue'))
 // Parent-managed Chart.js charts, extracted into self-contained children that
 // own their own canvas + create/update/destroy lifecycle. Lazy-loaded so the
 // Chart.js code drops out of the DashboardView entry chunk (matching the
@@ -1920,6 +1926,7 @@ const marketStatusPoller = useVisibilityPolling(() => checkMarketStatus(), 60000
 const sectionDefinitions = [
   { id: 'hero-metrics', title: 'Hero Metrics Ribbon', category: 'stats', defaultVisible: true },
   { id: 'journal-entry', title: "Today's Journal Entry", category: 'content', defaultVisible: true },
+  { id: 'daily-review', title: 'Daily Review', category: 'content', defaultVisible: true },
   { id: 'ai-insight', title: 'AI Insight of the Day', category: 'stats', defaultVisible: true },
   { id: 'equity-and-calendar', title: 'Equity Curve & Calendar', category: 'charts', defaultVisible: true },
   { id: 'open-positions', title: 'Open Positions', category: 'content', defaultVisible: true },
@@ -2283,13 +2290,23 @@ function loadDashboardLayout() {
       }
     }
 
-    // Append new sections at the end using their registry defaults.
-    const appendedNew = Array.from(normalizedById.values())
+    // Insert new sections near their default neighbors (so a newly registered
+    // widget like Daily Review lands after Journal, not buried at the bottom).
+    const merged = [...normalizedLayout]
+    for (const section of normalizedById.values()) {
+      const defIndex = sectionDefinitions.findIndex(s => s.id === section.id)
+      let insertAt = merged.length
+      for (let i = defIndex - 1; i >= 0; i--) {
+        const prevIdx = merged.findIndex(s => s.id === sectionDefinitions[i].id)
+        if (prevIdx !== -1) {
+          insertAt = prevIdx + 1
+          break
+        }
+      }
+      merged.splice(insertAt, 0, section)
+    }
 
-    dashboardLayout.value = [
-      ...normalizedLayout,
-      ...appendedNew
-    ]
+    dashboardLayout.value = merged
   }
 }
 

@@ -38,18 +38,31 @@ function parseDateKey(value) {
 /**
  * Period-aware daily review data loader.
  * Day is fully wired; week/month/year keep the same shape for later expansion.
+ *
+ * @param {{ standalone?: boolean, initialDate?: string }} [options]
+ *   standalone — local date state (no route sync); for dashboard widgets etc.
+ *   initialDate — yyyy-MM-dd seed when standalone (defaults to today)
  */
-export function useDailyReview() {
+export function useDailyReview(options = {}) {
+  const standalone = !!options.standalone
+  // Always call router composables (Vue setup rules); unused in standalone mode.
   const route = useRoute()
   const router = useRouter()
   const { selectedAccount } = useGlobalAccountFilter()
 
-  const period = computed(() => {
-    const raw = String(route.query.period || 'day')
-    return PERIODS.some((p) => p.id === raw && p.enabled) ? raw : 'day'
-  })
+  const localDateKey = ref(parseDateKey(options.initialDate) || todayKey())
+  const localPeriod = ref('day')
 
-  const dateKey = computed(() => parseDateKey(route.query.date) || todayKey())
+  const period = standalone
+    ? computed(() => localPeriod.value)
+    : computed(() => {
+        const raw = String(route.query.period || 'day')
+        return PERIODS.some((p) => p.id === raw && p.enabled) ? raw : 'day'
+      })
+
+  const dateKey = standalone
+    ? computed(() => localDateKey.value)
+    : computed(() => parseDateKey(route.query.date) || todayKey())
 
   const anchorDate = computed(() => parseISO(dateKey.value))
 
@@ -128,10 +141,19 @@ export function useDailyReview() {
   })
 
   function setQuery({ date, period: nextPeriod } = {}) {
+    const nextDate = date || dateKey.value
+    const nextPer = nextPeriod || period.value
+    if (standalone) {
+      if (date) localDateKey.value = parseDateKey(date) || todayKey()
+      if (nextPeriod && PERIODS.some((p) => p.id === nextPeriod && p.enabled)) {
+        localPeriod.value = nextPeriod
+      }
+      return
+    }
     const query = {
       ...route.query,
-      date: date || dateKey.value,
-      period: nextPeriod || period.value
+      date: nextDate,
+      period: nextPer
     }
     router.replace({ name: 'daily', query })
   }
