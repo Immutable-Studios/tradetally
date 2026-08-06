@@ -2055,33 +2055,83 @@ class SchwabService {
   }
 
   /**
-   * Delete journal futures opens that this sync's fills produced, when the
-   * reconciled trade list no longer has a matching open (flat / closed).
+   * Plan deletions/resizes to bring persisted open lots down to targetQty.
+   *
+   * Oldest lots are trimmed first. Futures re-syncs import a fresh open lot and
+   * leave prior day-aggregates around; keeping the newest lot preserves the
+   * just-reconciled view (opposite of equity reconcile, which prefers originals).
+   *
+   * @param {Array<{id: string, quantity: number|string}>} lots - oldest-first
+   * @param {number} targetQty
+   * @returns {{ deleteIds: string[], resizes: Array<{ id: string, from: number, to: number }> }}
+   */
+  planPersistedFuturesOpenTrim(lots, targetQty) {
+    const target = Math.max(0, Number(targetQty) || 0);
+    const dbQty = (lots || []).reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
+    const deleteIds = [];
+    const resizes = [];
+    if (dbQty <= target) return { deleteIds, resizes };
+
+    let excess = dbQty - target;
+    for (const lot of lots || []) {
+      if (excess <= 0) break;
+      const qty = Number(lot.quantity) || 0;
+      if (qty <= excess) {
+        excess -= qty;
+        deleteIds.push(lot.id);
+      } else {
+        const keepQty = qty - excess;
+        excess = 0;
+        resizes.push({ id: lot.id, from: qty, to: keepQty });
+      }
+    }
+    return { deleteIds, resizes };
+  }
+
+  /**
+   * Align persisted futures opens with this sync's reconciled open book.
+   *
+   * Schwab's positions API omits futures, so equity-style live reconcile cannot
+   * clear them. Earlier syncs often leave overlapping open lots that share entry
+   * order IDs with the current parse but carry inflated quantities (day-grouping
+   * re-aggregates differently each run). Those phantoms made "% of equity"
+   * absurd (e.g. MGCZ26 at 348%).
+   *
+   * Only touches opens whose entry order IDs appear in this fetch's fills.
+   * When the reconciled list still has an open for that symbol/side, trim the
+   * persisted book down to that target qty (delete/resize newest lots first).
+   * When flat, delete every touched open.
    *
    * @param {string} userId
    * @param {Array} reconciledTrades - trades after FIFO + fill-net + equity reconcile
    * @param {Map<string, Set<string>>} futuresFillOrderIds - account|symbol -> orderIds
+   * @returns {Promise<number>} number of lots deleted or resized
    */
   async dropPhantomFuturesOpens(userId, reconciledTrades, futuresFillOrderIds) {
     if (!futuresFillOrderIds || futuresFillOrderIds.size === 0) return 0;
 
-    const stillOpenKeys = new Set(
-      (reconciledTrades || [])
-        .filter(t => t.instrumentType === 'future' && t.exitPrice == null && t.exitTime == null)
-        .map(t => `${t.accountIdentifier || 'unknown'}|${t.symbol}|${t.side}`)
-    );
+    // Target open qty per account|symbol|side from this sync's reconciled output.
+    const targetByKey = new Map();
+    for (const trade of reconciledTrades || []) {
+      if (trade.instrumentType !== 'future') continue;
+      if (trade.exitPrice != null || trade.exitTime != null) continue;
+      const key = `${trade.accountIdentifier || 'unknown'}|${trade.symbol}|${trade.side}`;
+      targetByKey.set(key, (targetByKey.get(key) || 0) + (Number(trade.quantity) || 0));
+    }
 
     const { rows } = await db.query(
-      `SELECT id, symbol, side, account_identifier, executions
+      `SELECT id, symbol, side, quantity, account_identifier, executions, entry_time, created_at
        FROM trades
        WHERE user_id = $1
          AND instrument_type = 'future'
          AND exit_price IS NULL
-         AND exit_time IS NULL`,
+         AND exit_time IS NULL
+       ORDER BY entry_time ASC NULLS FIRST, created_at ASC`,
       [userId]
     );
 
-    let removed = 0;
+    // Group persisted opens that were produced by this sync's fills.
+    const groups = new Map();
     for (const row of rows) {
       const symbolKey = `${row.account_identifier || 'unknown'}|${row.symbol}`;
       const fillOrderIds = futuresFillOrderIds.get(symbolKey);
@@ -2098,13 +2148,40 @@ class SchwabService {
       if (!entryOrderIds.some(id => fillOrderIds.has(id))) continue;
 
       const openKey = `${symbolKey}|${row.side}`;
-      if (stillOpenKeys.has(openKey)) continue;
-
-      console.log(`[SCHWAB] Deleting phantom futures open ${row.id} ${row.symbol} ${row.side} (fills in sync, no reconciled open)`);
-      await Trade.delete(row.id, userId, { skipOptionGrouping: true });
-      removed++;
+      if (!groups.has(openKey)) groups.set(openKey, []);
+      groups.get(openKey).push(row);
     }
-    return removed;
+
+    let changed = 0;
+    for (const [openKey, lots] of groups.entries()) {
+      const targetQty = targetByKey.get(openKey) || 0;
+      const dbQty = lots.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
+
+      const { deleteIds, resizes } = this.planPersistedFuturesOpenTrim(lots, targetQty);
+      if (!deleteIds.length && !resizes.length) continue;
+
+      console.log(
+        `[SCHWAB] Reconciling persisted futures opens for ${openKey}: ` +
+        `db=${dbQty} target=${targetQty} delete=${deleteIds.length} resize=${resizes.length}`
+      );
+
+      for (const id of deleteIds) {
+        const lot = lots.find(l => l.id === id);
+        console.log(`[SCHWAB] Deleting phantom futures open ${id} ${lot?.symbol} ${lot?.side} qty=${lot?.quantity}`);
+        await Trade.delete(id, userId, { skipOptionGrouping: true });
+        changed++;
+      }
+      for (const resize of resizes) {
+        console.log(`[SCHWAB] Resizing phantom futures open ${resize.id}: ${resize.from} -> ${resize.to}`);
+        await db.query(
+          `UPDATE trades SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3`,
+          [resize.to, resize.id, userId]
+        );
+        changed++;
+      }
+    }
+
+    return changed;
   }
 
   /**
@@ -2188,10 +2265,17 @@ class SchwabService {
 
         // Closed trade whose entry orders already appear on remnant opens/partials:
         // drop those remnants and import the authoritative closed lot.
-        if (tradeData.exitPrice != null && tradeData.exitPrice !== '') {
+        // Open futures whose entry orders already appear on older opens: drop those
+        // overlapping opens first (re-sync re-aggregates day lots at different qtys
+        // and would otherwise stack phantoms — MGCZ26 hit 83 contracts / 348% eq).
+        const isOpenImport = tradeData.exitPrice == null || tradeData.exitPrice === '';
+        if (!isOpenImport || tradeData.instrumentType === 'future') {
           const removed = await this.removeSiblingTradesSharingEntryOrders(userId, tradeData, null, existingTrades);
           if (removed > 0) {
-            console.log(`[SCHWAB] Cleared ${removed} remnant(s) before importing closed ${tradeData.symbol}`);
+            console.log(
+              `[SCHWAB] Cleared ${removed} remnant(s) before importing ` +
+              `${isOpenImport ? 'open' : 'closed'} ${tradeData.symbol}`
+            );
           }
         }
 
@@ -2381,11 +2465,15 @@ class SchwabService {
       if (!existing?.id || existing.id === keepTradeId) continue;
       if (!this._tradeSymbolsMatch(closedTrade, existing)) continue;
 
+      // Never delete closed history via this path — only open/partial remnants.
+      const existingHasExit = existing.exit_price != null && existing.exit_price !== '';
+      if (existingHasExit) continue;
+
       const existingEntryIds = this._entryOrderIdsFromTrade(existing);
       const overlaps = [...entryOrderIds].some(id => existingEntryIds.has(id));
       if (!overlaps) continue;
 
-      console.log(`[SCHWAB] Removing remnant trade ${existing.id} for ${closedTrade.symbol} (shared entry order with closed lot)`);
+      console.log(`[SCHWAB] Removing remnant trade ${existing.id} for ${closedTrade.symbol} (shared entry order)`);
       try {
         await Trade.delete(existing.id, userId, { skipOptionGrouping: true });
         existingTrades.splice(i, 1);

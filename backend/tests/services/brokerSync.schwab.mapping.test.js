@@ -229,6 +229,29 @@ describe('Schwab parseTransactionDetails (single transaction mapping)', () => {
     expect(reconciled[0].exitPrice).toBe(28950);
   });
 
+  test('persisted futures open trim drops oldest overlapping lots so newest reconciled open survives', () => {
+    // Mirrors the MGCZ26 phantom stack: same fills re-imported at 25, then 36, then 7.
+    const plan = schwabService.planPersistedFuturesOpenTrim(
+      [
+        { id: 'a', quantity: 25 },
+        { id: 'b', quantity: 36 },
+        { id: 'c', quantity: 7 }
+      ],
+      7
+    );
+    expect(plan.deleteIds).toEqual(['a', 'b']);
+    expect(plan.resizes).toEqual([]);
+  });
+
+  test('persisted futures open trim is a no-op when already at or below target', () => {
+    const plan = schwabService.planPersistedFuturesOpenTrim(
+      [{ id: 'a', quantity: 6 }, { id: 'b', quantity: 3 }],
+      14
+    );
+    expect(plan.deleteIds).toEqual([]);
+    expect(plan.resizes).toEqual([]);
+  });
+
   test('fill-net map only includes futures symbols from the fill stream', () => {
     const map = schwabService.buildFillNetPositionMap([
       {
